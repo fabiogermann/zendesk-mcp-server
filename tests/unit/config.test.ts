@@ -7,6 +7,7 @@ import { isStartupError, STARTUP_DOCS } from '../../src/utils/startup-error';
 const LOAD_CONFIG_ENV = [
   'ZENDESK_SUBDOMAIN',
   'ZENDESK_OAUTH_CLIENT_ID',
+  'ZENDESK_BRAND_ID',
   'LOG_LEVEL',
   'TRANSPORT',
   'LISTEN_HOST',
@@ -77,6 +78,44 @@ describe('loadConfig', () => {
   it('parses --read-only flag', () => {
     const config = loadConfig(['mycompany', '--read-only']);
     expect(config.readOnly).toBe(true);
+  });
+
+  it('leaves brandId unset by default (the account default brand)', () => {
+    const config = loadConfig(['mycompany']);
+    expect(config.brandId).toBeUndefined();
+  });
+
+  it('parses --brand-id flag', () => {
+    const config = loadConfig(['mycompany', '--brand-id', '123456']);
+    expect(config.brandId).toBe(123456);
+  });
+
+  it('reads ZENDESK_BRAND_ID from env', () => {
+    process.env['ZENDESK_BRAND_ID'] = '123456';
+    const config = loadConfig(['mycompany']);
+    expect(config.brandId).toBe(123456);
+  });
+
+  it('lets --brand-id win over ZENDESK_BRAND_ID', () => {
+    process.env['ZENDESK_BRAND_ID'] = '111111';
+    const config = loadConfig(['mycompany', '--brand-id', '222222']);
+    expect(config.brandId).toBe(222222);
+  });
+
+  it('rejects a non-numeric --brand-id', () => {
+    expect(() => loadConfig(['mycompany', '--brand-id', 'abc'])).toThrow(
+      'Invalid --brand-id value',
+    );
+  });
+
+  it('rejects a non-integer ZENDESK_BRAND_ID', () => {
+    process.env['ZENDESK_BRAND_ID'] = '12.5';
+    expect(() => loadConfig(['mycompany'])).toThrow();
+  });
+
+  it('rejects an empty ZENDESK_BRAND_ID', () => {
+    process.env['ZENDESK_BRAND_ID'] = '';
+    expect(() => loadConfig(['mycompany'])).toThrow('Empty ZENDESK_BRAND_ID');
   });
 
   it('enables the topology context by default', () => {
@@ -512,7 +551,7 @@ describe('loadConfig', () => {
 
     it('covers every value-taking flag declared in CLI_OPTIONS', () => {
       // Guards the parametrised cases below against silently shrinking to zero.
-      expect(valueFlags).toHaveLength(14);
+      expect(valueFlags).toHaveLength(15);
     });
 
     it.each(valueFlags)('rejects %s as the last argument (value forgotten)', (flag) => {

@@ -78,8 +78,12 @@ export const promotedArticlesEnabled = (config: Config): boolean =>
  */
 export const buildInstructions = (config: Config): string | undefined => {
   if (!helpCenterContextEnabled(config)) return undefined;
+  const scope =
+    config.brandId === undefined
+      ? `the Zendesk Help Center of "${config.subdomain}"`
+      : `brand ${config.brandId} of the Zendesk Help Center of "${config.subdomain}"`;
   return [
-    `This MCP server is connected to the Zendesk Help Center of "${config.subdomain}".`,
+    `This MCP server is connected to ${scope}.`,
     '',
     `When creating or editing Help Center content, the resource ${topologyResourceUri(config)} is useful context:`,
     'it lists the active locales (and the default one), the category → section tree with IDs,',

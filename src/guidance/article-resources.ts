@@ -55,6 +55,7 @@ export const fetchPromotedArticles = async (
   subdomain: string,
   token: string,
   maxPages: number = ARTICLE_RESOURCES_SCAN_MAX_PAGES,
+  brandId?: number,
 ): Promise<PromotedArticleScan> => {
   const promoted: ZendeskArticle[] = [];
   let cursor: string | undefined;
@@ -67,6 +68,7 @@ export const fetchPromotedArticles = async (
       token,
       '/articles',
       buildCursorParams(MAX_PAGE_SIZE, cursor),
+      brandId,
     );
     const articles = response.articles ?? [];
     for (const article of articles) {
@@ -97,9 +99,16 @@ export const fetchArticleMarkdown = async (
   token: string,
   id: number,
   locale?: string,
+  brandId?: number,
 ): Promise<string> => {
   const path = locale ? `/${locale}/articles/${id}` : `/articles/${id}`;
-  const { article } = await helpCenterGet<{ article: ZendeskArticle }>(subdomain, token, path);
+  const { article } = await helpCenterGet<{ article: ZendeskArticle }>(
+    subdomain,
+    token,
+    path,
+    undefined,
+    brandId,
+  );
   const text = [formatArticleSummary(article), '', htmlToMarkdown(article.body)].join('\n');
   return truncateIfNeeded(
     text,
@@ -127,6 +136,7 @@ export const createArticleResourcesProvider = (
   getToken: () => string | Promise<string>,
   subdomain: string,
   onUnauthorized?: () => void,
+  brandId?: number,
 ): ArticleResourcesProvider => {
   let cached: { at: number; promise: Promise<PromotedArticleList> } | undefined;
 
@@ -143,7 +153,12 @@ export const createArticleResourcesProvider = (
 
       const promise = (async () => {
         const token = await getToken();
-        const { articles, truncated } = await fetchPromotedArticles(subdomain, token);
+        const { articles, truncated } = await fetchPromotedArticles(
+          subdomain,
+          token,
+          ARTICLE_RESOURCES_SCAN_MAX_PAGES,
+          brandId,
+        );
         // Map to lean refs before caching so the per-session cache holds only the
         // id + title, never the full article bodies from the scan.
         return { refs: articles.map((a) => ({ id: a.id, title: a.title })), truncated };
@@ -160,7 +175,7 @@ export const createArticleResourcesProvider = (
     async readArticle(id) {
       try {
         const token = await getToken();
-        return await fetchArticleMarkdown(subdomain, token, id);
+        return await fetchArticleMarkdown(subdomain, token, id, undefined, brandId);
       } catch (err) {
         notifyIfUnauthorized(err);
         throw err;

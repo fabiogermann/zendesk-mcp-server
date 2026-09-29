@@ -15,8 +15,8 @@ whole feature degrades silently, it never breaks a session.
 ## `instructions` (sent on `initialize`)
 
 A short, static blob auto-loaded by compliant clients. It names the Zendesk
-subdomain and points at the topology resource. No Zendesk request is made to
-build it.
+subdomain (and the brand, when `--brand-id` restricts the server) and points
+at the topology resource. No Zendesk request is made to build it.
 
 ## `zendesk-hc://topology` (pull-only resource)
 
@@ -28,6 +28,10 @@ read on demand, never pushed. It returns Markdown describing
 - the visibility user segments;
 - the Guide permission groups;
 - the calling user's role.
+
+When the server is restricted with `--brand-id`, the locales, tree and user
+segments are that brand's, and the header names the brand; permission groups
+and the user are account-wide either way.
 
 Prefer these IDs (`section_id`, `permission_group_id`, `user_segment_id`,
 `locale`) over guessing from names.

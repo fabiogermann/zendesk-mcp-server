@@ -13,6 +13,12 @@ describe('getHelpCenterBaseUrl', () => {
       'https://mycompany.zendesk.com/api/v2/help_center',
     );
   });
+
+  it('builds the brand-scoped Help Center API base URL when a brand id is given', () => {
+    expect(getHelpCenterBaseUrl('mycompany', 123456)).toBe(
+      'https://mycompany.zendesk.com/api/v2/help_center/brands/123456',
+    );
+  });
 });
 
 describe('getOAuthUrls', () => {

@@ -40,6 +40,7 @@ out every `write` tool before the proxies are built.
 
 | Tool | Description | Mode |
 |------|-------------|------|
+| `list_brands` | List the account's brands — the discovery source for `--brand-id` on multi-brand accounts | read |
 | `search_articles` | Full-text search across Help Center articles | read |
 | `get_article` | Retrieve article by ID with full HTML body | read |
 | `get_article_outline` | Compact outline of an article (sections + available translations) | read |

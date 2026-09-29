@@ -21,6 +21,8 @@ import { extractPaginationMeta } from '../utils/pagination';
 /** Aggregated, auto-discoverable structure of a Help Center instance. */
 export interface TopologyData {
   subdomain: string;
+  /** Brand the Help Center sections were read from; unset = account default. */
+  brandId?: number;
   locales: ZendeskLocalesResponse;
   categories: ZendeskCategory[];
   sections: ZendeskSection[];
@@ -65,20 +67,37 @@ const tolerate403 = async <T>(
  * and sections are each capped at one max-size page; `sectionsHasMore` /
  * `categoriesHasMore` signal a Help Center too large to enumerate inline.
  */
-export const fetchTopology = async (subdomain: string, token: string): Promise<TopologyData> => {
+export const fetchTopology = async (
+  subdomain: string,
+  token: string,
+  brandId?: number,
+): Promise<TopologyData> => {
   const pageParams = { 'page[size]': String(MAX_PAGE_SIZE) };
   const [locales, categoriesRes, sectionsRes, segments, perms, meRes] = await Promise.all([
-    helpCenterGet<ZendeskLocalesResponse>(subdomain, token, '/locales'),
+    helpCenterGet<ZendeskLocalesResponse>(subdomain, token, '/locales', undefined, brandId),
     helpCenterGet<ZendeskListResponse<ZendeskCategory>>(
       subdomain,
       token,
       '/categories',
       pageParams,
+      brandId,
     ),
-    helpCenterGet<ZendeskListResponse<ZendeskSection>>(subdomain, token, '/sections', pageParams),
+    helpCenterGet<ZendeskListResponse<ZendeskSection>>(
+      subdomain,
+      token,
+      '/sections',
+      pageParams,
+      brandId,
+    ),
     // Admin-gated: degrade to empty on 403 rather than failing the whole resource.
     tolerate403(
-      helpCenterGet<{ user_segments: ZendeskUserSegment[] }>(subdomain, token, '/user_segments'),
+      helpCenterGet<{ user_segments: ZendeskUserSegment[] }>(
+        subdomain,
+        token,
+        '/user_segments',
+        undefined,
+        brandId,
+      ),
       { user_segments: [] },
     ),
     tolerate403(
@@ -96,6 +115,9 @@ export const fetchTopology = async (subdomain: string, token: string): Promise<T
   const sections = sectionsRes.sections ?? [];
   return {
     subdomain,
+    // Spread rather than assign: exactOptionalPropertyTypes forbids writing an
+    // explicit `undefined` into an optional field.
+    ...(brandId === undefined ? {} : { brandId }),
     locales,
     categories,
     sections,
@@ -166,7 +188,7 @@ const renderAdminSection = (items: string[], denied: boolean, deniedNote: string
 /** Render the topology as a compact Markdown document for the LLM context. */
 export const formatTopology = (data: TopologyData): string => {
   const text = [
-    `# Zendesk Help Center topology — ${data.subdomain}`,
+    `# Zendesk Help Center topology — ${data.subdomain}${data.brandId === undefined ? '' : ` (brand ${data.brandId})`}`,
     '',
     `**Your access**: ${data.currentUser.name} (id ${data.currentUser.id}), role "${data.currentUser.role}".`,
     '',
@@ -216,6 +238,7 @@ export const createTopologyProvider = (
   getToken: () => string | Promise<string>,
   subdomain: string,
   onUnauthorized?: () => void,
+  brandId?: number,
 ): TopologyProvider => {
   let cached: { at: number; promise: Promise<string> } | undefined;
 
@@ -226,7 +249,7 @@ export const createTopologyProvider = (
 
       const promise = (async () => {
         const token = await getToken();
-        return formatTopology(await fetchTopology(subdomain, token));
+        return formatTopology(await fetchTopology(subdomain, token, brandId));
       })().catch((err: unknown) => {
         cached = undefined;
         if (onUnauthorized && err instanceof ZendeskApiError && err.status === 401) {

@@ -924,6 +924,30 @@ export const manyContentTagsHandler = http.get(`${BASE}/guide/content_tags`, () 
 );
 
 export const handlers = [
+  // Brands (Support API): the discovery source for --brand-id. Shaped per the
+  // Zendesk Brands API reference.
+  http.get(`${BASE}/brands`, () =>
+    HttpResponse.json({
+      brands: [
+        {
+          id: 360001234567,
+          name: 'Main brand',
+          brand_url: 'https://testsubdomain.zendesk.com',
+          subdomain: 'testsubdomain',
+          host_mapping: null,
+          default: true,
+          active: true,
+        },
+      ],
+    }),
+  ),
+
+  // Brand-scoped Help Center: the base the brand-scoped client helpers build
+  // when a --brand-id is configured. Only the integration scenario exercises it.
+  http.get(`${HC_BASE}/brands/424242/categories`, () =>
+    HttpResponse.json({ categories: [MOCK_CATEGORY] }),
+  ),
+
   // Views (issue #121). Registered before `/tickets/:id` so `/tickets/show_many`
   // hits its own handler instead of being captured as an `:id`.
   http.get(`${BASE}/tickets/show_many`, ({ request }) => {
