@@ -24,6 +24,7 @@ import { fetchPromotedArticles, LIST_PROMOTED_ARTICLES_TOOL } from '../guidance/
 import type {
   ZendeskArticle,
   ZendeskArticleAttachment,
+  ZendeskBrand,
   ZendeskCategory,
   ZendeskContentTag,
   ZendeskLabel,
@@ -54,6 +55,7 @@ import {
   formatArticle,
   formatArticleSummary,
   formatAttachment,
+  formatBrand,
   formatCategory,
   formatContentTag,
   formatLabel,
@@ -91,11 +93,14 @@ const listTranslations = (
   subdomain: string,
   token: string,
   articleId: number,
+  brandId?: number,
 ): Promise<ZendeskTranslation[]> =>
   helpCenterGet<{ translations: ZendeskTranslation[] }>(
     subdomain,
     token,
     `/articles/${articleId}/translations`,
+    undefined,
+    brandId,
   ).then((res) => res.translations);
 
 // --- Section / category translations.
@@ -122,12 +127,14 @@ const listNodeTranslations = (
   kind: TreeNodeKind,
   nodeId: number,
   locale?: string,
+  brandId?: number,
 ): Promise<ZendeskTranslation[]> =>
   helpCenterGet<{ translations: ZendeskTranslation[] }>(
     subdomain,
     token,
     `/${kind}/${nodeId}/translations`,
     locale ? { locales: locale.toLowerCase() } : undefined,
+    brandId,
   ).then((res) => res.translations ?? []);
 
 // Case-insensitive: a caller may well pass "FR" or a copy-paste from Guide.
@@ -151,10 +158,11 @@ const upsertNodeTranslation = async (
   kind: TreeNodeKind,
   nodeId: number,
   input: { locale: string; name?: string; description?: string; draft?: boolean },
+  brandId?: number,
 ): Promise<{ translation: ZendeskTranslation; created: boolean }> => {
   const { locale, name, description, draft } = input;
   const existing = findTranslation(
-    await listNodeTranslations(subdomain, token, kind, nodeId, locale),
+    await listNodeTranslations(subdomain, token, kind, nodeId, locale, brandId),
     locale,
   );
 
@@ -169,6 +177,7 @@ const upsertNodeTranslation = async (
       token,
       `/${kind}/${nodeId}/translations`,
       { translation: { locale, title: name, body: description ?? '', draft: draft ?? false } },
+      brandId,
     );
     return { translation, created: true };
   }
@@ -189,6 +198,7 @@ const upsertNodeTranslation = async (
     token,
     `/${kind}/${nodeId}/translations/${existing.locale}`,
     { translation: updates },
+    brandId,
   );
   return { translation, created: false };
 };
@@ -299,6 +309,7 @@ const fetchGapCategories = async (
   subdomain: string,
   token: string,
   categoryId: number | undefined,
+  brandId?: number,
 ): Promise<{ categories: ZendeskCategory[]; hasMore: boolean }> => {
   if (categoryId !== undefined) {
     // Measured on a live tenant, this show endpoint included (#226): the sideload
@@ -310,6 +321,7 @@ const fetchGapCategories = async (
       token,
       `/categories/${categoryId}`,
       { include: TRANSLATIONS_SIDELOAD },
+      brandId,
     );
     return { categories: [category], hasMore: false };
   }
@@ -318,6 +330,7 @@ const fetchGapCategories = async (
     token,
     '/categories',
     { ...buildCursorParams(MAX_PAGE_SIZE, undefined), include: TRANSLATIONS_SIDELOAD },
+    brandId,
   );
   const categories = response.categories ?? [];
   return { categories, hasMore: extractPaginationMeta(response, categories.length).has_more };
@@ -559,7 +572,7 @@ const assertReorderParamsCoherent = (
 };
 
 export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
-  const { subdomain, getToken } = ctx;
+  const { subdomain, brandId, getToken } = ctx;
 
   // A section's articles in the EFFECTIVE display order an end user sees (no
   // sort_by), paginated to completion so reorder and its verification see all.
@@ -580,6 +593,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         token,
         `/${locale}/sections/${sectionId}/articles`,
         buildCursorParams(MAX_PAGE_SIZE, cursor),
+        brandId,
       );
       const articles = response.articles ?? [];
       for (const article of articles) {
@@ -609,6 +623,8 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         subdomain,
         token,
         `/articles/${referenceArticleId}`,
+        undefined,
+        brandId,
       );
       detail = `is in section #${ref.section_id}, not section #${sectionId}`;
     } catch {
@@ -630,9 +646,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
     let applied = 0;
     for (const write of writes) {
       try {
-        await helpCenterPut(subdomain, token, `/articles/${write.id}`, {
-          article: { position: write.position },
-        });
+        await helpCenterPut(
+          subdomain,
+          token,
+          `/articles/${write.id}`,
+          { article: { position: write.position } },
+          brandId,
+        );
         applied += 1;
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -646,6 +666,41 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
   };
 
   return [
+    {
+      name: 'list_brands',
+      namespace: 'help_center',
+      readOnly: true,
+      title: 'List Zendesk Brands',
+      description:
+        "List the Zendesk account's brands (id, name, URL, default/active flags) from the Support API. Multi-brand Guide accounts have one Help Center per brand: find the brand id here, then start the server with --brand-id to scope every Help Center operation (articles, sections, categories, translations, topology) to that brand. Unneeded on single-brand accounts — the default brand is implicit.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      handler: async () => {
+        const token = await getToken();
+        // Brands live on the account-wide Support API, never under the
+        // brand-scoped Help Center base — this call stays unscoped on purpose.
+        const response = await zendeskGet<{ brands: ZendeskBrand[] }>(subdomain, token, '/brands');
+        const brands = response.brands ?? [];
+        return {
+          content: [
+            {
+              type: 'text',
+              text: formatList(
+                brands,
+                formatBrand,
+                undefined,
+                'Scope the whole server to one brand by starting it with --brand-id <id>.',
+              ),
+            },
+          ],
+        };
+      },
+    },
     {
       name: 'search_articles',
       namespace: 'help_center',
@@ -691,6 +746,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           '/articles/search',
           p,
+          brandId,
         );
         return {
           content: [
@@ -731,8 +787,10 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           subdomain,
           token,
           path,
+          undefined,
+          brandId,
         );
-        const translations = await listTranslations(subdomain, token, article_id);
+        const translations = await listTranslations(subdomain, token, article_id, brandId);
         const hint = largeArticleHint(article.body, parseSections(article.body).length);
         const text =
           (hint ?? '') +
@@ -796,6 +854,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           path,
           buildCursorParams(page_size, cursor),
+          brandId,
         );
         const categories = response.categories ?? [];
         return {
@@ -864,6 +923,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           sectionListPath(category_id, locale),
           buildCursorParams(page_size, cursor),
+          brandId,
         );
         const sections = response.sections ?? [];
         return {
@@ -950,6 +1010,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           articleListPath(section_id, locale),
           { ...buildCursorParams(page_size, cursor), sort_by, sort_order },
+          brandId,
         );
         const articles = response.articles ?? [];
         if (!include_translations) {
@@ -997,7 +1058,12 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       },
       handler: async () => {
         const token = await getToken();
-        const { articles, truncated, pagesScanned } = await fetchPromotedArticles(subdomain, token);
+        const { articles, truncated, pagesScanned } = await fetchPromotedArticles(
+          subdomain,
+          token,
+          ARTICLE_RESOURCES_SCAN_MAX_PAGES,
+          brandId,
+        );
         const header = `Promoted (featured) articles: ${articles.length}`;
         const body = articles.length
           ? articles.map(formatArticleSummary).join('\n\n')
@@ -1039,7 +1105,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { article_id } = params as { article_id: number };
         const token = await getToken();
-        const translations = await listTranslations(subdomain, token, article_id);
+        const translations = await listTranslations(subdomain, token, article_id, brandId);
         return {
           content: [
             {
@@ -1094,6 +1160,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/articles/${article_id}/translations`,
           { translation: { locale, title, body, draft } },
+          brandId,
         );
         return {
           content: [
@@ -1156,6 +1223,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/articles/${article_id}/translations/${locale}`,
           { translation: updates },
+          brandId,
         );
         return {
           content: [
@@ -1191,7 +1259,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { section_id } = params as { section_id: number };
         const token = await getToken();
-        const translations = await listNodeTranslations(subdomain, token, 'sections', section_id);
+        const translations = await listNodeTranslations(
+          subdomain,
+          token,
+          'sections',
+          section_id,
+          undefined,
+          brandId,
+        );
         return {
           content: [
             {
@@ -1236,6 +1311,8 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           'categories',
           category_id,
+          undefined,
+          brandId,
         );
         return {
           content: [
@@ -1283,13 +1360,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const { locale, category_id } = params as { locale: string; category_id?: number };
         const token = await getToken();
         const [locales, categoryScope, sectionsRes] = await Promise.all([
-          helpCenterGet<ZendeskLocalesResponse>(subdomain, token, '/locales'),
-          fetchGapCategories(subdomain, token, category_id),
+          helpCenterGet<ZendeskLocalesResponse>(subdomain, token, '/locales', undefined, brandId),
+          fetchGapCategories(subdomain, token, category_id, brandId),
           helpCenterGet<ZendeskListResponse<ZendeskSection>>(
             subdomain,
             token,
             sectionListPath(category_id, undefined),
             { ...buildCursorParams(MAX_PAGE_SIZE, undefined), include: TRANSLATIONS_SIDELOAD },
+            brandId,
           ),
         ]);
 
@@ -1386,6 +1464,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           'sections',
           section_id,
           input,
+          brandId,
         );
         return {
           content: [
@@ -1457,6 +1536,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           'categories',
           category_id,
           input,
+          brandId,
         );
         return {
           content: [
@@ -1596,6 +1676,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/sections/${section_id}/articles`,
           { article: articleData },
+          brandId,
         );
         return {
           content: [
@@ -1686,6 +1767,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/articles/${article_id}`,
           { article: updates },
+          brandId,
         );
         return {
           content: [
@@ -1871,7 +1953,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           );
         }
         const token = await getToken();
-        await helpCenterDelete(subdomain, token, `/articles/${article_id}`);
+        await helpCenterDelete(subdomain, token, `/articles/${article_id}`, brandId);
         return {
           content: [
             {
@@ -2016,6 +2098,8 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           subdomain,
           token,
           '/articles/labels',
+          undefined,
+          brandId,
         );
         return {
           content: [
@@ -2053,7 +2137,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           response = await helpCenterGet<{
             user_segments: ZendeskUserSegment[];
             count: number;
-          }>(subdomain, token, '/user_segments');
+          }>(subdomain, token, '/user_segments', undefined, brandId);
         } catch (error) {
           // GET /help_center/user_segments requires Guide-admin / Help Center manager
           // rights. Rewrite the generic 403 into actionable guidance with the
@@ -2106,7 +2190,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const response = await helpCenterGet<{
           article_attachments: ZendeskArticleAttachment[];
           count: number;
-        }>(subdomain, token, `/articles/${article_id}/attachments`);
+        }>(subdomain, token, `/articles/${article_id}/attachments`, undefined, brandId);
         const attachments = response.article_attachments ?? [];
         if (attachments.length === 0) {
           return {
@@ -2155,14 +2239,18 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           subdomain,
           token,
           `/articles/${article_id}`,
+          undefined,
+          brandId,
         );
         const effectiveLocale = locale ?? article.source_locale;
         const { translation } = await helpCenterGet<{ translation: ZendeskTranslation }>(
           subdomain,
           token,
           `/articles/${article_id}/translations/${effectiveLocale}`,
+          undefined,
+          brandId,
         );
-        const translations = await listTranslations(subdomain, token, article_id);
+        const translations = await listTranslations(subdomain, token, article_id, brandId);
         const sections = parseSections(translation.body);
 
         const outlineLines = sections.length
@@ -2230,6 +2318,8 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           subdomain,
           token,
           `/articles/${article_id}/translations/${locale}`,
+          undefined,
+          brandId,
         );
         const sections = parseSections(translation.body);
         const section = sections[section_index];
@@ -2303,6 +2393,8 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           subdomain,
           token,
           `/articles/${article_id}/translations/${locale}`,
+          undefined,
+          brandId,
         );
         const newSectionHtml = format === 'markdown' ? markdownToHtml(content) : content;
         const newBody = replaceSectionContent(translation.body, section_index, newSectionHtml);
@@ -2311,6 +2403,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/articles/${article_id}/translations/${locale}`,
           { translation: { body: newBody } },
+          brandId,
         );
         const updatedSections = parseSections(updated.body);
         const updatedSection = updatedSections[section_index];
@@ -2357,15 +2450,19 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
             subdomain,
             token,
             `/articles/${article_id}/translations/${source_locale}`,
+            undefined,
+            brandId,
           ),
           helpCenterGet<{ translation: ZendeskTranslation }>(
             subdomain,
             token,
             `/articles/${article_id}/translations/${target_locale}`,
+            undefined,
+            brandId,
           ),
           // The `outdated` flag is only exposed on the list endpoint, not on a
           // single-translation GET — same reason get_article_outline lists too.
-          listTranslations(subdomain, token, article_id),
+          listTranslations(subdomain, token, article_id, brandId),
         ]);
         const sourceSections = parseSections(sourceRes.translation.body);
         const targetSections = parseSections(targetRes.translation.body);
@@ -2451,7 +2548,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         formData.append('file', blob, file_name);
         const { article_attachment } = await helpCenterUpload<{
           article_attachment: ZendeskArticleAttachment;
-        }>(subdomain, token, `/articles/${article_id}/attachments`, formData);
+        }>(subdomain, token, `/articles/${article_id}/attachments`, formData, brandId);
         return {
           content: [
             {

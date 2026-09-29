@@ -308,7 +308,12 @@ export const registerToolset = (
     // both correct. Registered only when the context is enabled; this also
     // advertises the `resources` capability (merged with `logging`).
     if (helpCenterContextEnabled(config)) {
-      const topology = createTopologyProvider(getToken, config.subdomain, onUnauthorized);
+      const topology = createTopologyProvider(
+        getToken,
+        config.subdomain,
+        onUnauthorized,
+        config.brandId,
+      );
       registered.push(
         server.registerResource(
           'help-center-topology',
@@ -334,7 +339,12 @@ export const registerToolset = (
     // and swallows scan failures: a transient error must not break resources/list,
     // which would hide the topology resource too.
     if (articleResourceEnabled(config)) {
-      const articles = createArticleResourcesProvider(getToken, config.subdomain, onUnauthorized);
+      const articles = createArticleResourcesProvider(
+        getToken,
+        config.subdomain,
+        onUnauthorized,
+        config.brandId,
+      );
       const listPromotedEnabled = promotedArticlesEnabled(config);
       const template = new ResourceTemplate(articleResourceUriTemplate(config), {
         list: async () => {
@@ -416,7 +426,7 @@ export const createMcpServer = (
   onUnauthorized?: () => void,
 ): McpServer => {
   const server = createServerShell(config, logger);
-  const tools = createAllTools({ subdomain: config.subdomain, getToken });
+  const tools = createAllTools({ subdomain: config.subdomain, brandId: config.brandId, getToken });
   registerToolset(server, { config, getToken, onUnauthorized, logger }, tools);
   return server;
 };

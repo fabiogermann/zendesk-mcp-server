@@ -27,8 +27,68 @@ const findTool = (name: string) => {
 };
 
 describe('help center tools', () => {
-  it('creates 29 tools', () => {
-    expect(createHelpCenterTools(ctx)).toHaveLength(29);
+  it('creates 30 tools', () => {
+    expect(createHelpCenterTools(ctx)).toHaveLength(30);
+  });
+
+  describe('list_brands', () => {
+    it('lists the account brands from the Support API (not Help Center)', async () => {
+      const tool = findTool('list_brands');
+      const result = await tool.handler({});
+      const text = result.content[0]?.text ?? '';
+      expect(text).toContain('Main brand');
+      expect(text).toContain('360001234567');
+    });
+
+    it('is read-only', () => {
+      expect(findTool('list_brands').readOnly).toBe(true);
+    });
+  });
+
+  describe('brand scoping (--brand-id)', () => {
+    const brandedCtx: ToolContext = { ...ctx, brandId: 424242 };
+
+    it('scopes Help Center reads to /brands/{id}', async () => {
+      let seenUrl = '';
+      mswServer.use(
+        http.get(
+          'https://testsubdomain.zendesk.com/api/v2/help_center/brands/424242/categories',
+          ({ request }) => {
+            seenUrl = request.url;
+            return HttpResponse.json({ categories: [MOCK_CATEGORY] });
+          },
+        ),
+      );
+      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_categories');
+      if (!tool) throw new Error('list_categories not found');
+      const result = await tool.handler({});
+      expect(seenUrl).toContain('/help_center/brands/424242/categories');
+      expect(result.content[0]?.text).toContain('General');
+    });
+
+    it('scopes Help Center writes to /brands/{id}', async () => {
+      let seenUrl = '';
+      mswServer.use(
+        http.put(
+          'https://testsubdomain.zendesk.com/api/v2/help_center/brands/424242/articles/9001',
+          ({ request }) => {
+            seenUrl = request.url;
+            return HttpResponse.json({ article: MOCK_ARTICLE });
+          },
+        ),
+      );
+      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'update_article');
+      if (!tool) throw new Error('update_article not found');
+      await tool.handler({ article_id: 9001, promoted: true });
+      expect(seenUrl).toContain('/help_center/brands/424242/articles/9001');
+    });
+
+    it('leaves list_brands itself unscoped (brands live on the Support API)', async () => {
+      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_brands');
+      if (!tool) throw new Error('list_brands not found');
+      const result = await tool.handler({});
+      expect(result.content[0]?.text).toContain('Main brand');
+    });
   });
 
   describe('list_promoted_articles', () => {

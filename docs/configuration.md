@@ -18,6 +18,9 @@ zendesk-mcp-server <subdomain> [options]
 
 Options:
   --mode <mode>           single | namespace (default) | all
+  --brand-id <id>         Restrict Help Center operations to one brand
+                          (multi-brand accounts; default: account default
+                          brand). Also ZENDESK_BRAND_ID.
   --namespace <ns>        Filter by namespace (repeatable): tickets, help_center,
                           users, requests. Defaults to tickets + help_center +
                           users; `requests` (the end-user surface) is opt-in and
@@ -221,6 +224,15 @@ Zendesk subdomain (e.g. `acme` for `acme.zendesk.com`).
 **Required:** no · **Default:** `<subdomain>_zendesk`
 
 OAuth client identifier.
+
+### `ZENDESK_BRAND_ID`
+**Required:** no · **Default:** none (account default brand)
+
+Restrict every Help Center operation — tools, the topology resource, the
+article resources — to one brand on a multi-brand account, via the
+brand-scoped Guide API (`/api/v2/help_center/brands/{id}/...`). Also `--brand-id`.
+Brand ids come from the `list_brands` tool or the Zendesk Brands API. Tickets,
+users and search are account-wide and unaffected.
 
 ### `OAUTH_CALLBACK_PORT`
 **Required:** no · **Default:** `27439`

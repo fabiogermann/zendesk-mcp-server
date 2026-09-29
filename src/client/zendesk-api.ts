@@ -153,13 +153,17 @@ export const zendeskPut = <T>(
   return executeRequest<T>(url, token, { method: 'PUT', body });
 };
 
+// The five helpCenter* helpers take an optional `brandId` (last, so existing
+// calls are untouched): set, they hit the brand-scoped Guide API
+// (/help_center/brands/{id}/...); unset, the account default brand.
 export const helpCenterGet = <T>(
   subdomain: string,
   token: string,
   path: string,
   params?: Record<string, string>,
+  brandId?: number,
 ): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path, params);
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandId), path, params);
   return executeRequest<T>(url, token);
 };
 
@@ -168,8 +172,9 @@ export const helpCenterPost = <T>(
   token: string,
   path: string,
   body: unknown,
+  brandId?: number,
 ): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path);
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandId), path);
   return executeRequest<T>(url, token, { method: 'POST', body });
 };
 
@@ -178,13 +183,19 @@ export const helpCenterPut = <T>(
   token: string,
   path: string,
   body: unknown,
+  brandId?: number,
 ): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path);
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandId), path);
   return executeRequest<T>(url, token, { method: 'PUT', body });
 };
 
-export const helpCenterDelete = <T>(subdomain: string, token: string, path: string): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path);
+export const helpCenterDelete = <T>(
+  subdomain: string,
+  token: string,
+  path: string,
+  brandId?: number,
+): Promise<T> => {
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandId), path);
   return executeRequest<T>(url, token, { method: 'DELETE' });
 };
 
@@ -247,8 +258,9 @@ export const helpCenterUpload = async <T>(
   token: string,
   path: string,
   formData: FormData,
+  brandId?: number,
 ): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path);
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandId), path);
   const response = await performFetch(
     'POST',
     url,

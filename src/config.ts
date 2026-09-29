@@ -29,6 +29,15 @@ export type Transport = z.infer<typeof Transport>;
 export const ConfigSchema = z.object({
   subdomain: z.string().min(1, 'ZENDESK_SUBDOMAIN is required'),
   oauthClientId: z.string().min(1),
+  /**
+   * Restrict every Help Center operation (tools, topology resource, article
+   * resources) to one brand on a multi-brand account, via the brand-scoped
+   * Guide API (/help_center/brands/{id}/...). Unset targets the account
+   * default brand — the only case a single-brand account ever sees. Brand ids
+   * come from the `list_brands` tool or the Brands API. Support-side
+   * namespaces (tickets, users, search) are account-wide and unaffected.
+   */
+  brandId: z.number().int().positive().optional(),
   logLevel: LogLevel,
   mode: ToolMode,
   readOnly: z.boolean(),
@@ -156,6 +165,7 @@ interface CliResult {
   // unconditionally: `exactOptionalPropertyTypes` would otherwise force a guard
   // that reads as behaviour but only ever satisfies the type checker.
   subdomain?: string | undefined;
+  brandId?: number;
   mode?: string;
   readOnly?: boolean;
   namespaces?: string[];
@@ -215,6 +225,7 @@ const portEnv = (name: string): number | undefined => {
 // guarantees cannot drift per flag. Adding a flag is one entry here.
 const CLI_OPTIONS = {
   mode: { type: 'string' },
+  'brand-id': { type: 'string' },
   namespace: { type: 'string', multiple: true },
   tool: { type: 'string', multiple: true },
   'log-level': { type: 'string' },
@@ -320,6 +331,8 @@ const parseCliArgs = (args: string[]): CliResult => {
   if (values['callback-port'] !== undefined) {
     result.callbackPort = parsePort(values['callback-port'], '--callback-port');
   }
+  if (values['brand-id'] !== undefined)
+    result.brandId = parsePort(values['brand-id'], '--brand-id');
 
   return result;
 };
@@ -373,6 +386,7 @@ export const loadConfig = (argv: string[] = process.argv.slice(2)): Config => {
   const namespaces = cli.namespaces ?? (cli.tools?.length ? [...Namespace.options] : undefined);
 
   const callbackPort = cli.callbackPort ?? portEnv('OAUTH_CALLBACK_PORT');
+  const brandId = cli.brandId ?? portEnv('ZENDESK_BRAND_ID');
 
   // Unset leaves this undefined so the schema default (`zendesk-hc`) applies;
   // empty is rejected by requireNonEmptyEnv. Format is schema-validated.
@@ -381,6 +395,7 @@ export const loadConfig = (argv: string[] = process.argv.slice(2)): Config => {
   return ConfigSchema.parse({
     subdomain,
     oauthClientId,
+    brandId,
     logLevel: cli.logLevel ?? requireNonEmptyEnv('LOG_LEVEL') ?? 'info',
     mode,
     readOnly: cli.readOnly ?? false,

@@ -36,5 +36,13 @@ export interface ToolDefinition {
 
 export interface ToolContext {
   subdomain: string;
+  /**
+   * Restricts Help Center operations to one brand (multi-brand accounts), via
+   * the brand-scoped Guide API. Unset targets the account default brand. Only
+   * the help_center namespace reads it; Support-side tools are account-wide.
+   * `| undefined` so callers can spread config.brandId straight in under
+   * exactOptionalPropertyTypes.
+   */
+  brandId?: number | undefined;
   getToken: () => string | Promise<string>;
 }

@@ -244,6 +244,23 @@ export const registerCoreScenarios = (harness: IntegrationHarness): void => {
         expect(textOf(result)).toContain('SLA contractuels fruggr - Bugs/Incidents');
       });
 
+      it('reaches list_brands over the wire, and scopes Help Center tools to --brand-id', async () => {
+        connected = await harness.connect(makeConfig({ mode: 'all' }));
+        const brands = await connected.client.callTool({ name: 'list_brands', arguments: {} });
+        expect(brands.isError).toBeFalsy();
+        expect(textOf(brands)).toContain('Main brand');
+        await connected.close();
+
+        // Brand-scoped: list_categories resolves through the brand Help Center.
+        connected = await harness.connect(makeConfig({ mode: 'all', brandId: 424242 }));
+        const scoped = await connected.client.callTool({
+          name: 'list_categories',
+          arguments: {},
+        });
+        expect(scoped.isError).toBeFalsy();
+        expect(textOf(scoped)).toContain('General');
+      });
+
       it('exposes one proxy per namespace in "namespace" mode', async () => {
         connected = await harness.connect(makeConfig({ mode: 'namespace' }));
         const { tools } = await connected.client.listTools();

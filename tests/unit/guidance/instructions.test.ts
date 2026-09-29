@@ -36,6 +36,15 @@ describe('buildInstructions', () => {
     expect(text).toContain(topologyResourceUri(config));
   });
 
+  it('names the brand restriction when one is configured', () => {
+    const text = buildInstructions(makeConfig({ subdomain: 'acme', brandId: 424242 }));
+    expect(text).toContain('424242');
+  });
+
+  it('mentions no brand when none is configured', () => {
+    expect(buildInstructions(makeConfig({ subdomain: 'acme' }))).not.toContain('brand');
+  });
+
   it('cites the custom scheme in the blob when one is configured', () => {
     const text = buildInstructions(makeConfig({ hcResourceScheme: 'wiki' }));
     expect(text).toContain('wiki://topology');
