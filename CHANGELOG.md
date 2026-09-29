@@ -1,3 +1,42 @@
+## [3.0.0](https://github.com/fruggr/zendesk-mcp-server/compare/v2.24.0...v3.0.0) (2026-09-29)
+
+### ⚠ BREAKING CHANGES
+
+* **http:** allow to run this server as HTTP thanks to its own OAuth authorization server ([#317](https://github.com/fruggr/zendesk-mcp-server/issues/317))
+* require Node.js 22 or later ([#321](https://github.com/fruggr/zendesk-mcp-server/issues/321))
+* **config:** the legacy environment variable names are no longer read.
+  Rename them, or stay on 2.24 (accepts both old and new names).
+
+  | Removed | Use instead |
+  |---|---|
+  | ZENDESK_OAUTH_CALLBACK_PORT | OAUTH_CALLBACK_PORT |
+  | ZENDESK_TOKEN_FILE | OAUTH_TOKEN_FILE |
+  | HOST | LISTEN_HOST |
+  | ZENDESK_CHARACTER_LIMIT | RESPONSE_CHARACTER_LIMIT |
+  | ZENDESK_MAX_RESPONSE_BYTES | RESPONSE_MAX_BYTES |
+  | ZENDESK_MAX_ATTACHMENT_BYTES | ATTACHMENT_MAX_BYTES |
+  | ZENDESK_MAX_EMBEDDED_IMAGES | EMBEDDED_IMAGES_MAX |
+  | ZENDESK_MAX_COMMENT_PAGES | COMMENT_MAX_PAGES |
+  | ZENDESK_TICKET_FIELD_SCAN_MAX_PAGES | TICKET_FIELD_SCAN_MAX_PAGES |
+  | ZENDESK_ARTICLE_RESOURCES_SCAN_MAX_PAGES | ARTICLE_RESOURCES_SCAN_MAX_PAGES |
+  | ZENDESK_REORDER_CONFIRM_THRESHOLD | REORDER_CONFIRM_THRESHOLD |
+
+### Features
+
+* **config:** remove legacy environment variable names ([#327](https://github.com/fruggr/zendesk-mcp-server/issues/327)) ([ccf03f7](https://github.com/fruggr/zendesk-mcp-server/commit/ccf03f75d4b905a869f8af7b91d8dcb655ac1c04)), closes [#319](https://github.com/fruggr/zendesk-mcp-server/issues/319)
+* **http:** allow to run this server as HTTP thanks to its own OAuth authorization server ([#317](https://github.com/fruggr/zendesk-mcp-server/issues/317)) ([a920fe6](https://github.com/fruggr/zendesk-mcp-server/commit/a920fe6fa9604294c6ebf7d33c71c870376cc1ec))
+* require Node.js 22 or later ([#321](https://github.com/fruggr/zendesk-mcp-server/issues/321)) ([4b9054b](https://github.com/fruggr/zendesk-mcp-server/commit/4b9054b6bf8ab622e736df8c390cf1d7f3805380))
+
+<details>
+<summary>🔧 Internal changes (chore, ci, build, refactor, tests, docs…)</summary>
+
+### Chores
+
+* **deps:** lock file maintenance ([#326](https://github.com/fruggr/zendesk-mcp-server/issues/326)) ([7703ddd](https://github.com/fruggr/zendesk-mcp-server/commit/7703ddd0c7e0425556c74972046a9c0653a3c4f7))
+* **deps:** update dependency @biomejs/biome to v2.5.14 ([#323](https://github.com/fruggr/zendesk-mcp-server/issues/323)) ([acfb9c4](https://github.com/fruggr/zendesk-mcp-server/commit/acfb9c4cefa5e15b75d234d39937187fcab945e7))
+* **deps:** update pnpm to v12.6.0 ([#322](https://github.com/fruggr/zendesk-mcp-server/issues/322)) ([6d481a8](https://github.com/fruggr/zendesk-mcp-server/commit/6d481a81a0c0863d635e36582d62207cb210de92))
+</details>
+
 ## [2.24.0](https://github.com/fruggr/zendesk-mcp-server/compare/v2.23.0...v2.24.0) (2026-09-26)
 
 ### Features
