@@ -1,3 +1,17 @@
+## [3.0.1](https://github.com/fruggr/zendesk-mcp-server/compare/v3.0.0...v3.0.1) (2026-09-30)
+
+### Bug Fixes
+
+* **help-center:** stop update_article_section duplicating a repeated heading ([#332](https://github.com/fruggr/zendesk-mcp-server/issues/332)) ([1f86928](https://github.com/fruggr/zendesk-mcp-server/commit/1f869286806a1b9a6a10fb31d92a6a4e41a28b74)), closes [#328](https://github.com/fruggr/zendesk-mcp-server/issues/328), references [#331](https://github.com/fruggr/zendesk-mcp-server/issues/331)
+
+<details>
+<summary>🔧 Internal changes (chore, ci, build, refactor, tests, docs…)</summary>
+
+### Chores
+
+* **deps:** update mcp sdk to v2.1.0 ([ebc1dfa](https://github.com/fruggr/zendesk-mcp-server/commit/ebc1dfa731394f92624148d7118cd3a942968d94))
+</details>
+
 ## [3.0.0](https://github.com/fruggr/zendesk-mcp-server/compare/v2.24.0...v3.0.0) (2026-09-29)
 
 ### ⚠ BREAKING CHANGES
