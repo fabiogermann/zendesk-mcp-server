@@ -90,6 +90,62 @@ describe('help center tools', () => {
       const result = await tool.handler({});
       expect(result.content[0]?.text).toContain('Main brand');
     });
+
+    it('exposes an optional brand_id on every brand-scoped Help Center tool', () => {
+      // The account-wide Guide tools (brands, permission groups, content tags)
+      // have no brand dimension and stay out.
+      const exempt = new Set([
+        'list_brands',
+        'list_permission_groups',
+        'list_content_tags',
+        'create_content_tag',
+      ]);
+      const missing = createHelpCenterTools(ctx)
+        .filter((t) => !exempt.has(t.name))
+        .filter((t) => !('brand_id' in t.inputSchema.shape))
+        .map((t) => t.name);
+      expect(missing).toEqual([]);
+    });
+
+    it('honours a per-call brand_id when no lock is configured', async () => {
+      let seenUrl = '';
+      mswServer.use(
+        http.get(
+          'https://testsubdomain.zendesk.com/api/v2/help_center/brands/777777/categories',
+          ({ request }) => {
+            seenUrl = request.url;
+            return HttpResponse.json({ categories: [MOCK_CATEGORY] });
+          },
+        ),
+      );
+      const tool = findTool('list_categories');
+      const result = await tool.handler({ brand_id: 777777 });
+      expect(seenUrl).toContain('/help_center/brands/777777/categories');
+      expect(result.content[0]?.text).toContain('General');
+    });
+
+    it('rejects a per-call brand_id that disagrees with the deploy lock', async () => {
+      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_categories');
+      if (!tool) throw new Error('list_categories not found');
+      await expect(tool.handler({ brand_id: 999999 })).rejects.toThrow('--brand-id');
+    });
+
+    it('accepts a per-call brand_id equal to the deploy lock', async () => {
+      let seenUrl = '';
+      mswServer.use(
+        http.get(
+          'https://testsubdomain.zendesk.com/api/v2/help_center/brands/424242/categories',
+          ({ request }) => {
+            seenUrl = request.url;
+            return HttpResponse.json({ categories: [MOCK_CATEGORY] });
+          },
+        ),
+      );
+      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_categories');
+      if (!tool) throw new Error('list_categories not found');
+      await tool.handler({ brand_id: 424242 });
+      expect(seenUrl).toContain('/help_center/brands/424242/categories');
+    });
   });
 
   describe('list_promoted_articles', () => {
