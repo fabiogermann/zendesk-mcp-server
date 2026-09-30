@@ -125,6 +125,86 @@ export const replaceSectionContent = (
     .join('');
 };
 
+export interface StrippedHeading {
+  tag: string;
+  text: string;
+}
+
+const LEADING_HEADING = /^\s*<(h[1-3])(?:\s[^>]*)?>([\s\S]*?)<\/\1\s*>/i;
+
+const normalizeText = (text: string): string => text.trim().split(WHITESPACE_RUN).join(' ');
+
+// The section heading is re-emitted around whatever `content` a caller sends, so a
+// caller that echoes the heading back (#328) would end up with it twice and split
+// the section in two. Sliced on the string, not re-serialised, to leave the rest
+// of the content byte for byte as sent.
+export const stripLeadingDuplicateHeading = (
+  html: string,
+  target: Pick<Section, 'heading' | 'headingTag'>,
+): { html: string; stripped: StrippedHeading | null } => {
+  const match = LEADING_HEADING.exec(html);
+  const tag = match?.[1];
+  // Stryker disable next-line LogicalOperator: `tag` is undefined exactly when `match` is
+  // null, so `!tag` only narrows the type for noUncheckedIndexedAccess.
+  if (!match || !tag) return { html, stripped: null };
+  // Stryker disable next-line StringLiteral: group 2 always takes part in a match, so the
+  // fallback is unreachable and only satisfies noUncheckedIndexedAccess.
+  const text = normalizeText(textOf(match[2] ?? ''));
+  // A same-titled heading of another level reads as a sub-heading, not an echo.
+  if (tag.toLowerCase() !== target.headingTag || text !== normalizeText(target.heading)) {
+    return { html, stripped: null };
+  }
+  return {
+    html: html.slice(match[0].length).trimStart(),
+    stripped: { tag: target.headingTag, text },
+  };
+};
+
+export type IntroLoss = 'empty' | 'heading-led' | null;
+
+// The intro exists only while text precedes the first heading. Emptying it drops section
+// 0 and moves every later index down; heading-led content turns it into a heading
+// section, so the count can stay the same while index 0 changes meaning.
+const introLoss = (target: Section | undefined, contentSections: Section[]): IntroLoss => {
+  // Stryker disable next-line OptionalChaining: replaceSectionContent already threw for an
+  // out-of-range index before this runs, so `target` is defined; `?.` only satisfies the types.
+  if (target?.level !== 0) return null;
+  const first = contentSections[0];
+  if (!first) return 'empty';
+  return first.level > 0 ? 'heading-led' : null;
+};
+
+// Wraps `replaceSectionContent` with the guards a write needs. The intro has an empty
+// `headingTag`, so it never matches a leading heading: there a heading is a structure change.
+export const applySectionUpdate = (
+  html: string,
+  sectionIndex: number,
+  newHtml: string,
+): {
+  body: string;
+  stripped: StrippedHeading | null;
+  contentHeadings: number;
+  introLost: IntroLoss;
+  sectionsBefore: number;
+} => {
+  const sections = parseSections(html);
+  const target = sections[sectionIndex];
+  const { html: content, stripped } = target
+    ? stripLeadingDuplicateHeading(newHtml, target)
+    : // Stryker disable next-line ObjectLiteral: no target means an out-of-range index, which
+      // replaceSectionContent throws for below, so this fallback is never read.
+      { html: newHtml, stripped: null };
+  const contentSections = parseSections(content);
+  const body = replaceSectionContent(html, sectionIndex, content);
+  return {
+    body,
+    stripped,
+    contentHeadings: contentSections.filter((s) => s.level > 0).length,
+    introLost: introLoss(target, contentSections),
+    sectionsBefore: sections.length,
+  };
+};
+
 // Keep structural HTML that markdown flattens lossily: <pre> with inline <br>
 // collapses to a single line, and <table> cells with multiple <p> break GFM
 // pipe tables. Leaving them as raw HTML is safer for round-trip.

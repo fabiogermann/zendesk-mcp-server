@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applySectionUpdate,
   htmlToMarkdown,
   markdownToHtml,
   parseSections,
   replaceSectionContent,
+  stripLeadingDuplicateHeading,
 } from '../../../src/utils/article-sections';
 
 describe('parseSections', () => {
@@ -177,6 +179,246 @@ describe('replaceSectionContent', () => {
     expect(sections).toHaveLength(2);
     expect(sections[1]?.heading).toBe('B');
     expect(sections[1]?.html).toContain('new b content');
+  });
+});
+
+const h = (heading: string, headingTag = 'h2') => ({ heading, headingTag });
+
+describe('stripLeadingDuplicateHeading (issue #328)', () => {
+  it('removes a leading heading that repeats the section heading', () => {
+    expect(
+      stripLeadingDuplicateHeading(
+        '<h2>Related articles</h2>\n<ul><li>a</li></ul>',
+        h('Related articles'),
+      ),
+    ).toMatchInlineSnapshot(`
+      {
+        "html": "<ul><li>a</li></ul>",
+        "stripped": {
+          "tag": "h2",
+          "text": "Related articles",
+        },
+      }
+    `);
+  });
+
+  it('keeps a leading heading whose text differs from the section heading', () => {
+    const html = '<h2>Other</h2><p>x</p>';
+    expect(stripLeadingDuplicateHeading(html, h('Related articles'))).toMatchInlineSnapshot(`
+      {
+        "html": "<h2>Other</h2><p>x</p>",
+        "stripped": null,
+      }
+    `);
+  });
+
+  it('keeps a same-titled heading of another level, which reads as a sub-heading', () => {
+    const html = '<h3>Setup</h3><p>x</p>';
+    expect(stripLeadingDuplicateHeading(html, h('Setup'))).toMatchInlineSnapshot(`
+      {
+        "html": "<h3>Setup</h3><p>x</p>",
+        "stripped": null,
+      }
+    `);
+  });
+
+  it('strips a same-level heading whatever the case of its tag', () => {
+    expect(
+      stripLeadingDuplicateHeading('<H3>Setup</H3><p>x</p>', h('Setup', 'h3')),
+    ).toMatchInlineSnapshot(`
+      {
+        "html": "<p>x</p>",
+        "stripped": {
+          "tag": "h3",
+          "text": "Setup",
+        },
+      }
+    `);
+  });
+
+  it('ignores whitespace runs and surrounding whitespace when comparing', () => {
+    expect(
+      stripLeadingDuplicateHeading(
+        '  \n<h2> Related\n  articles </h2><p>x</p>',
+        h('Related  articles'),
+      ).stripped,
+    ).toMatchInlineSnapshot(`
+      {
+        "tag": "h2",
+        "text": "Related articles",
+      }
+    `);
+  });
+
+  it('compares the text of the heading, not its inline markup or entities', () => {
+    expect(
+      stripLeadingDuplicateHeading(
+        '<h2 id="x">Fish &amp; <em>Chips</em></h2><p>y</p>',
+        h('Fish & Chips'),
+      ).html,
+    ).toBe('<p>y</p>');
+  });
+
+  it('is case sensitive, since a different case reads as an intended rename', () => {
+    expect(
+      stripLeadingDuplicateHeading('<h2>related articles</h2><p>x</p>', h('Related articles'))
+        .stripped,
+    ).toBeNull();
+  });
+
+  it('only looks at the very start of the content', () => {
+    const html = '<p>x</p><h2>Setup</h2><p>y</p>';
+    expect(stripLeadingDuplicateHeading(html, h('Setup'))).toMatchInlineSnapshot(`
+      {
+        "html": "<p>x</p><h2>Setup</h2><p>y</p>",
+        "stripped": null,
+      }
+    `);
+  });
+
+  it('removes only the first of two identical leading headings', () => {
+    expect(stripLeadingDuplicateHeading('<h2>A</h2><h2>A</h2><p>x</p>', h('A')).html).toBe(
+      '<h2>A</h2><p>x</p>',
+    );
+  });
+
+  it('only recognises h1 to h3, like parseSections', () => {
+    const html = '<h4>Setup</h4><p>x</p>';
+    expect(stripLeadingDuplicateHeading(html, h('Setup')).stripped).toBeNull();
+  });
+
+  it('returns an empty string when the content was only the heading', () => {
+    expect(stripLeadingDuplicateHeading('<h2>Setup</h2>', h('Setup')).html).toBe('');
+  });
+
+  it('leaves the rest of the content byte for byte untouched', () => {
+    const rest = '<p class="a">x &amp; y</p><pre>a<br>b</pre>';
+    expect(stripLeadingDuplicateHeading(`<h2>Setup</h2>${rest}`, h('Setup')).html).toBe(rest);
+  });
+});
+
+describe('applySectionUpdate (issue #328)', () => {
+  it('does not duplicate the heading when the content repeats it', () => {
+    const body = '<p>intro</p><h2>Related articles</h2><ul><li>old</li></ul>';
+    const result = applySectionUpdate(body, 1, '<h2>Related articles</h2><ul><li>new</li></ul>');
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "body": "<p>intro</p><h2>Related articles</h2><ul><li>new</li></ul>",
+        "contentHeadings": 0,
+        "introLost": null,
+        "sectionsBefore": 2,
+        "stripped": {
+          "tag": "h2",
+          "text": "Related articles",
+        },
+      }
+    `);
+    expect(parseSections(result.body)).toHaveLength(2);
+  });
+
+  it('behaves like replaceSectionContent when the content carries no heading', () => {
+    const body = '<h2>A</h2><p>a</p><h2>B</h2><p>b</p>';
+    expect(applySectionUpdate(body, 1, '<p>new</p>')).toEqual({
+      body: replaceSectionContent(body, 1, '<p>new</p>'),
+      stripped: null,
+      contentHeadings: 0,
+      introLost: null,
+      sectionsBefore: 2,
+    });
+  });
+
+  it('keeps a same-titled sub-heading of another level instead of deleting it', () => {
+    const body = '<h2>FAQ</h2><p>y</p>';
+    const result = applySectionUpdate(body, 0, '<h3>FAQ</h3><p>n</p>');
+    expect(result.body).toBe('<h2>FAQ</h2><h3>FAQ</h3><p>n</p>');
+    expect(result.stripped).toBeNull();
+    expect(result.contentHeadings).toBe(1);
+  });
+
+  it('reports how many sections the body had before the update', () => {
+    expect(
+      applySectionUpdate('<p>i</p><h2>A</h2><p>a</p><h2>B</h2>', 1, '<p>x</p>').sectionsBefore,
+    ).toBe(3);
+  });
+
+  describe('introLost', () => {
+    const body = '<p>intro</p><h2>A</h2><p>a</p>';
+
+    it('is "heading-led" when heading-led content replaces the intro, whose count stays put', () => {
+      const result = applySectionUpdate(body, 0, '<h2>X</h2><p>y</p>');
+      expect(result.introLost).toBe('heading-led');
+      expect(parseSections(result.body)).toHaveLength(parseSections(body).length);
+    });
+
+    it('is "empty" when the intro is emptied, which drops section 0 and shifts the rest', () => {
+      const result = applySectionUpdate(body, 0, '');
+      expect(result.introLost).toBe('empty');
+      expect(parseSections(result.body)).toHaveLength(parseSections(body).length - 1);
+    });
+
+    it('treats whitespace-only content as empty', () => {
+      expect(applySectionUpdate(body, 0, ' \n ').introLost).toBe('empty');
+    });
+
+    it('is null when the new intro keeps text before its first heading', () => {
+      expect(applySectionUpdate(body, 0, '<p>t</p><h2>X</h2>').introLost).toBeNull();
+    });
+
+    it('is null when the intro is replaced by plain content', () => {
+      expect(applySectionUpdate(body, 0, '<p>t</p>').introLost).toBeNull();
+    });
+
+    it('is null for a section that has its own heading, even when emptied', () => {
+      expect(applySectionUpdate(body, 1, '<h3>S</h3><p>x</p>').introLost).toBeNull();
+      expect(applySectionUpdate(body, 1, '').introLost).toBeNull();
+    });
+  });
+
+  it('counts the headings that remain in the content', () => {
+    const body = '<h2>A</h2><p>a</p><h2>B</h2><p>b</p>';
+    const result = applySectionUpdate(body, 0, '<p>x</p><h3>Sub</h3><p>y</p><h3>Sub 2</h3>');
+    expect(result.contentHeadings).toBe(2);
+    expect(result.stripped).toBeNull();
+    expect(parseSections(result.body)).toHaveLength(4);
+  });
+
+  it('strips the duplicate and still counts the other headings', () => {
+    const body = '<h2>A</h2><p>a</p>';
+    const result = applySectionUpdate(body, 0, '<h2>A</h2><p>x</p><h3>Sub</h3>');
+    expect(result.stripped).toEqual({ tag: 'h2', text: 'A' });
+    expect(result.contentHeadings).toBe(1);
+  });
+
+  it('never strips from the heading-less intro, where a heading is a structure change', () => {
+    const body = '<p>intro</p><h2>Related articles</h2><p>x</p>';
+    const result = applySectionUpdate(body, 0, '<h2>Related articles</h2><p>y</p>');
+    expect(result.stripped).toBeNull();
+    expect(result.contentHeadings).toBe(1);
+  });
+
+  it('leaves a heading titled like the intro placeholder alone in the intro', () => {
+    // parseSections labels the intro "intro"; that is a label, not a heading to echo.
+    const body = '<p>intro</p><h2>A</h2><p>a</p>';
+    const result = applySectionUpdate(body, 0, '<h2>intro</h2><p>x</p>');
+    expect(result.stripped).toBeNull();
+    expect(result.contentHeadings).toBe(1);
+  });
+
+  it('does not count a heading nested in another element, which is not a section', () => {
+    const body = '<h2>A</h2><p>a</p>';
+    expect(applySectionUpdate(body, 0, '<div><h2>x</h2></div>').contentHeadings).toBe(0);
+  });
+
+  it('keeps the out-of-range error even when the content leads with a heading', () => {
+    expect(() => applySectionUpdate('<h2>A</h2><p>1</p>', 4, '<h2>A</h2><p>x</p>')).toThrow(
+      'Section index 4 out of range (valid: 0-0)',
+    );
+  });
+
+  it('keeps the out-of-range error of replaceSectionContent', () => {
+    expect(() => applySectionUpdate('<h2>A</h2><p>1</p>', 4, '<p>x</p>')).toThrow(
+      'Section index 4 out of range (valid: 0-0)',
+    );
   });
 });
 

@@ -1,5 +1,6 @@
 import { HttpResponse, http } from 'msw';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { CHARACTER_LIMIT, MAX_BASE64_INPUT_CHARS } from '../../../src/constants';
 import type { ToolContext } from '../../../src/tools/definitions';
 import { createHelpCenterTools } from '../../../src/tools/help-center';
@@ -1617,6 +1618,162 @@ describe('help center tools', () => {
         content: '<p>x</p>',
       });
       expect((parsed as { format: string }).format).toBe('html');
+    });
+
+    describe('heading in content (issue #328)', () => {
+      const BODY = '<p>Intro</p><h2>Related articles</h2><ul><li>old</li></ul>';
+
+      // Serves BODY and records the body the tool PUTs back.
+      const stubBody = (body = BODY) => {
+        const puts: string[] = [];
+        mswServer.use(
+          http.get(`${HC_BASE}/articles/:id/translations/:locale`, () =>
+            HttpResponse.json({ translation: { ...MOCK_TRANSLATION, body } }),
+          ),
+          http.put(`${HC_BASE}/articles/:id/translations/:locale`, async ({ request }) => {
+            const { translation } = (await request.json()) as { translation: { body: string } };
+            puts.push(translation.body);
+            return HttpResponse.json({ translation: { ...MOCK_TRANSLATION, ...translation } });
+          }),
+        );
+        return puts;
+      };
+
+      const run = async (params: Record<string, unknown>) => {
+        const result = await findTool('update_article_section').handler({
+          article_id: 5000,
+          locale: 'en-us',
+          format: 'html',
+          ...params,
+        });
+        return result.content[0]?.text ?? '';
+      };
+
+      it('does not duplicate the heading when content repeats it, and says so', async () => {
+        const puts = stubBody();
+        const text = await run({
+          section_index: 1,
+          content: '<h2>Related articles</h2>\n<ul><li>new</li></ul>',
+        });
+        expect(puts).toEqual(['<p>Intro</p><h2>Related articles</h2><ul><li>new</li></ul>']);
+        expect(text).toMatchInlineSnapshot(`
+          "Section [1] "Related articles" updated for article #5000 (en-us).
+          New word count: 1.
+          Note: removed a leading <h2> "Related articles" from content; the section heading is kept automatically and is not part of content."
+        `);
+      });
+
+      it('strips the repeated heading from Markdown content too', async () => {
+        const puts = stubBody();
+        const text = await run({
+          section_index: 1,
+          format: 'markdown',
+          content: '## Related articles\n\n- new',
+        });
+        expect(puts).toEqual(['<p>Intro</p><h2>Related articles</h2><ul>\n<li>new</li>\n</ul>']);
+        expect(text).toContain('Note: removed a leading <h2> "Related articles"');
+      });
+
+      it('warns, without blocking the write, when content adds headings', async () => {
+        const puts = stubBody();
+        const text = await run({
+          section_index: 1,
+          content: '<p>a</p><h3>Sub</h3><p>b</p>',
+        });
+        expect(puts).toEqual(['<p>Intro</p><h2>Related articles</h2><p>a</p><h3>Sub</h3><p>b</p>']);
+        expect(text).toMatchInlineSnapshot(`
+          "Section [1] "Related articles" updated for article #5000 (en-us).
+          New word count: 1.
+          Warning: content contains 1 heading(s) (h1-h3), so the article now has 3 sections (was 2); indexes after [1] shifted. Call get_article_outline before the next edit."
+        `);
+      });
+
+      it('reports the lost intro rather than a shift when the section count stays put', async () => {
+        const puts = stubBody();
+        const text = await run({ section_index: 0, content: '<h2>Top</h2><p>y</p>' });
+        expect(puts).toEqual([
+          '<h2>Top</h2><p>y</p><h2>Related articles</h2><ul><li>old</li></ul>',
+        ]);
+        expect(text).toMatchInlineSnapshot(`
+          "Section [0] "Top" updated for article #5000 (en-us).
+          New word count: 1.
+          Warning: content starts with a heading, so the intro no longer exists and section [0] is now a heading section (article: 2 sections, was 2). Call get_article_outline before the next edit."
+        `);
+      });
+
+      it('reports an emptied intro, whose removal moves every later index down', async () => {
+        const puts = stubBody();
+        const text = await run({ section_index: 0, content: '' });
+        expect(puts).toEqual(['<h2>Related articles</h2><ul><li>old</li></ul>']);
+        expect(text).toMatchInlineSnapshot(`
+          "Section [0] "(intro)" updated for article #5000 (en-us).
+          New word count: 0.
+          Warning: content is empty, so the intro no longer exists and every later section index moved down by one (article: 1 sections, was 2). Call get_article_outline before the next edit."
+        `);
+      });
+
+      it('says the body is now empty when the emptied intro was the only section', async () => {
+        const puts = stubBody('<p>Just an intro</p>');
+        const text = await run({ section_index: 0, content: '' });
+        expect(puts).toEqual(['']);
+        expect(text).toMatchInlineSnapshot(`
+          "Section [0] "(intro)" updated for article #5000 (en-us).
+          New word count: 0.
+          Warning: content is empty and the intro was the only section, so the article body is now empty."
+        `);
+      });
+
+      it('keeps a same-titled heading of another level and warns instead of deleting it', async () => {
+        const puts = stubBody();
+        const text = await run({
+          section_index: 1,
+          content: '<h3>Related articles</h3><ul><li>x</li></ul>',
+        });
+        expect(puts).toEqual([
+          '<p>Intro</p><h2>Related articles</h2><h3>Related articles</h3><ul><li>x</li></ul>',
+        ]);
+        expect(text).toMatchInlineSnapshot(`
+          "Section [1] "Related articles" updated for article #5000 (en-us).
+          New word count: 0.
+          Warning: content contains 1 heading(s) (h1-h3), so the article now has 3 sections (was 2); indexes after [1] shifted. Call get_article_outline before the next edit."
+        `);
+      });
+
+      it('adds nothing to the response when content carries no heading', async () => {
+        stubBody();
+        const text = await run({ section_index: 1, content: '<p>one two</p>' });
+        expect(text).toMatchInlineSnapshot(`
+          "Section [1] "Related articles" updated for article #5000 (en-us).
+          New word count: 2."
+        `);
+      });
+
+      it('reports both the removed duplicate and the remaining headings', async () => {
+        stubBody();
+        const text = await run({
+          section_index: 1,
+          content: '<h2>Related articles</h2><p>a</p><h3>Sub</h3>',
+        });
+        expect(text).toContain('Note: removed a leading <h2> "Related articles"');
+        expect(text).toContain('Warning: content contains 1 heading(s)');
+      });
+    });
+
+    it('states that the heading is excluded in the first sentence, all a namespace proxy shows', () => {
+      const tool = findTool('update_article_section');
+      const firstSentence = tool.description.slice(0, tool.description.indexOf('. ') + 1);
+      expect(firstSentence).toContain('heading excluded');
+    });
+
+    it('documents the intro section and the heading rules in the schema', () => {
+      const tool = findTool('update_article_section');
+      const props = (
+        z.toJSONSchema(tool.inputSchema, { io: 'input' }) as {
+          properties: Record<string, { description?: string }>;
+        }
+      ).properties;
+      expect(props['section_index']?.description).toContain('heading-less intro');
+      expect(props['content']?.description).toContain('heading excluded');
     });
   });
 
