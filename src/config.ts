@@ -32,8 +32,8 @@ export const ConfigSchema = z.object({
   oauthClientId: z.string().min(1),
   /**
    * Restrict every Help Center operation (tools, topology resource, article
-   * resources) to one brand on a multi-brand account, via the brand-scoped
-   * Guide API (/help_center/brands/{id}/...). Unset targets the account
+   * resources) to one brand on a multi-brand account, addressed by the brand's
+   * own host (resolved via GET /api/v2/brands/{id}). Unset targets the account
    * default brand — the only case a single-brand account ever sees. Brand ids
    * come from the `list_brands` tool or the Brands API. Support-side
    * namespaces (tickets, users, search) are account-wide and unaffected.

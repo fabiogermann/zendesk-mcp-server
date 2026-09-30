@@ -71,33 +71,30 @@ export const fetchTopology = async (
   subdomain: string,
   token: string,
   brandId?: number,
+  brandHost?: string,
 ): Promise<TopologyData> => {
   const pageParams = { 'page[size]': String(MAX_PAGE_SIZE) };
   const [locales, categoriesRes, sectionsRes, segments, perms, meRes] = await Promise.all([
-    helpCenterGet<ZendeskLocalesResponse>(subdomain, token, '/locales', undefined, brandId),
+    helpCenterGet<ZendeskLocalesResponse>(subdomain, token, '/locales', undefined, brandHost),
     helpCenterGet<ZendeskListResponse<ZendeskCategory>>(
       subdomain,
       token,
       '/categories',
       pageParams,
-      brandId,
+      brandHost,
     ),
     helpCenterGet<ZendeskListResponse<ZendeskSection>>(
       subdomain,
       token,
       '/sections',
       pageParams,
-      brandId,
+      brandHost,
     ),
     // Admin-gated: degrade to empty on 403 rather than failing the whole resource.
+    // User segments are ACCOUNT-WIDE (shared across brands — the endpoint has no
+    // brand dimension), so this one is deliberately NOT brand-scoped.
     tolerate403(
-      helpCenterGet<{ user_segments: ZendeskUserSegment[] }>(
-        subdomain,
-        token,
-        '/user_segments',
-        undefined,
-        brandId,
-      ),
+      helpCenterGet<{ user_segments: ZendeskUserSegment[] }>(subdomain, token, '/user_segments'),
       { user_segments: [] },
     ),
     tolerate403(
@@ -239,6 +236,7 @@ export const createTopologyProvider = (
   subdomain: string,
   onUnauthorized?: () => void,
   brandId?: number,
+  resolveBrandHost: () => Promise<string | undefined> = () => Promise.resolve(undefined),
 ): TopologyProvider => {
   let cached: { at: number; promise: Promise<string> } | undefined;
 
@@ -248,8 +246,8 @@ export const createTopologyProvider = (
       if (cached && now - cached.at < TOPOLOGY_TTL_MS) return cached.promise;
 
       const promise = (async () => {
-        const token = await getToken();
-        return formatTopology(await fetchTopology(subdomain, token, brandId));
+        const [token, brandHost] = await Promise.all([getToken(), resolveBrandHost()]);
+        return formatTopology(await fetchTopology(subdomain, token, brandId, brandHost));
       })().catch((err: unknown) => {
         cached = undefined;
         if (onUnauthorized && err instanceof ZendeskApiError && err.status === 401) {

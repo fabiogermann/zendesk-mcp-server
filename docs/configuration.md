@@ -252,10 +252,12 @@ HTTP mode, add `<public-url>/oauth/callback` to its redirect URLs
 **Required:** no · **Default:** none (account default brand)
 
 Restrict every Help Center operation — tools, the topology resource, the
-article resources — to one brand on a multi-brand account, via the
-brand-scoped Guide API (`/api/v2/help_center/brands/{id}/...`). Also `--brand-id`.
-Brand ids come from the `list_brands` tool or the Zendesk Brands API. Tickets,
-users and search are account-wide and unaffected.
+article resources — to one brand on a multi-brand account. Zendesk addresses
+brands by host: the server resolves the brand id via `GET /api/v2/brands/{id}`
+(cached) and calls the brand's own host (`host_mapping` when set, else
+`<brand.subdomain>.zendesk.com`) under the standard `/api/v2/help_center` path.
+Also `--brand-id`. Brand ids come from the `list_brands` tool or the Zendesk
+Brands API. Tickets, users and search are account-wide and unaffected.
 
 The lock is a **hard lock**: every brand-scoped Help Center tool also takes an
 optional `brand_id` parameter, and with the lock set only that same value is

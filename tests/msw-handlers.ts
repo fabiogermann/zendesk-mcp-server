@@ -940,9 +940,24 @@ export const handlers = [
   // Zendesk Brands API reference.
   http.get(`${BASE}/brands`, () => HttpResponse.json({ brands: [MOCK_BRAND] })),
 
-  // Brand-scoped Help Center: the base the brand-scoped client helpers build
-  // when a --brand-id is configured. Only the integration scenario exercises it.
-  http.get(`${HC_BASE}/brands/424242/categories`, () =>
+  // Brand id → host resolution (client/brands.ts) and the brand-scoped Help
+  // Center the host serves. Zendesk addresses brands by HOST: the brand's own
+  // host answers the standard /api/v2/help_center path. Only the integration
+  // scenario exercises these.
+  http.get(`${BASE}/brands/424242`, () =>
+    HttpResponse.json({
+      brand: {
+        id: 424242,
+        name: 'Second brand',
+        brand_url: 'https://brand424242.zendesk.com',
+        subdomain: 'brand424242',
+        host_mapping: null,
+        default: false,
+        active: true,
+      },
+    }),
+  ),
+  http.get('https://brand424242.zendesk.com/api/v2/help_center/categories', () =>
     HttpResponse.json({ categories: [MOCK_CATEGORY] }),
   ),
 

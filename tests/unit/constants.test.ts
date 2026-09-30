@@ -14,9 +14,15 @@ describe('getHelpCenterBaseUrl', () => {
     );
   });
 
-  it('builds the brand-scoped Help Center API base URL when a brand id is given', () => {
-    expect(getHelpCenterBaseUrl('mycompany', 123456)).toBe(
-      'https://mycompany.zendesk.com/api/v2/help_center/brands/123456',
+  it('builds the brand-scoped Help Center API base URL when a brand host is given', () => {
+    expect(getHelpCenterBaseUrl('mycompany', 'brand1.zendesk.com')).toBe(
+      'https://brand1.zendesk.com/api/v2/help_center',
+    );
+  });
+
+  it('prefers a brand host mapping (custom domain)', () => {
+    expect(getHelpCenterBaseUrl('mycompany', 'help.example.com')).toBe(
+      'https://help.example.com/api/v2/help_center',
     );
   });
 });
