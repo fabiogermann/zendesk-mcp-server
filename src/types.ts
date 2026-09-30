@@ -499,6 +499,7 @@ export interface ZendeskListResponse<T> {
   users?: T[];
   organizations?: T[];
   articles?: T[];
+  brands?: T[];
   categories?: T[];
   sections?: T[];
   comments?: T[];

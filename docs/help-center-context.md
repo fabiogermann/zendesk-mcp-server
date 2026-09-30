@@ -29,9 +29,10 @@ read on demand, never pushed. It returns Markdown describing
 - the Guide permission groups;
 - the calling user's role.
 
-When the server is restricted with `--brand-id`, the locales, tree and user
-segments are that brand's, and the header names the brand; permission groups
-and the user are account-wide either way.
+When the server is restricted with `--brand-id`, the locales and the
+category/section tree are that brand's, and the header names the brand. User
+segments, permission groups and the calling user are account-wide either way —
+user segments are shared across brands, not per-brand.
 
 Prefer these IDs (`section_id`, `permission_group_id`, `user_segment_id`,
 `locale`) over guessing from names.

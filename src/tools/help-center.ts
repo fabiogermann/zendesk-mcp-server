@@ -97,7 +97,7 @@ const BRAND_ID_FIELD = z
 /**
  * Resolve which brand a call targets: the per-call override when given, else the
  * deploy-time lock (`--brand-id`) when set, else the account default brand
- * (undefined → no /brands/{id} segment). A per-call value that contradicts the
+ * (undefined → no brand host override). A per-call value that contradicts the
  * deploy lock is rejected, naming the flag that forbids it.
  */
 export const resolveBrandId = (
@@ -121,14 +121,14 @@ const listTranslations = (
   subdomain: string,
   token: string,
   articleId: number,
-  brandId?: number,
+  brandHost?: string,
 ): Promise<ZendeskTranslation[]> =>
   helpCenterGet<{ translations: ZendeskTranslation[] }>(
     subdomain,
     token,
     `/articles/${articleId}/translations`,
     undefined,
-    brandId,
+    brandHost,
   ).then((res) => res.translations);
 
 // --- Section / category translations.
@@ -155,14 +155,14 @@ const listNodeTranslations = (
   kind: TreeNodeKind,
   nodeId: number,
   locale?: string,
-  brandId?: number,
+  brandHost?: string,
 ): Promise<ZendeskTranslation[]> =>
   helpCenterGet<{ translations: ZendeskTranslation[] }>(
     subdomain,
     token,
     `/${kind}/${nodeId}/translations`,
     locale ? { locales: locale.toLowerCase() } : undefined,
-    brandId,
+    brandHost,
   ).then((res) => res.translations ?? []);
 
 // Case-insensitive: a caller may well pass "FR" or a copy-paste from Guide.
@@ -186,11 +186,11 @@ const upsertNodeTranslation = async (
   kind: TreeNodeKind,
   nodeId: number,
   input: { locale: string; name?: string; description?: string; draft?: boolean },
-  brandId?: number,
+  brandHost?: string,
 ): Promise<{ translation: ZendeskTranslation; created: boolean }> => {
   const { locale, name, description, draft } = input;
   const existing = findTranslation(
-    await listNodeTranslations(subdomain, token, kind, nodeId, locale, brandId),
+    await listNodeTranslations(subdomain, token, kind, nodeId, locale, brandHost),
     locale,
   );
 
@@ -205,7 +205,7 @@ const upsertNodeTranslation = async (
       token,
       `/${kind}/${nodeId}/translations`,
       { translation: { locale, title: name, body: description ?? '', draft: draft ?? false } },
-      brandId,
+      brandHost,
     );
     return { translation, created: true };
   }
@@ -226,7 +226,7 @@ const upsertNodeTranslation = async (
     token,
     `/${kind}/${nodeId}/translations/${existing.locale}`,
     { translation: updates },
-    brandId,
+    brandHost,
   );
   return { translation, created: false };
 };
@@ -337,7 +337,7 @@ const fetchGapCategories = async (
   subdomain: string,
   token: string,
   categoryId: number | undefined,
-  brandId?: number,
+  brandHost?: string,
 ): Promise<{ categories: ZendeskCategory[]; hasMore: boolean }> => {
   if (categoryId !== undefined) {
     // Measured on a live tenant, this show endpoint included (#226): the sideload
@@ -349,7 +349,7 @@ const fetchGapCategories = async (
       token,
       `/categories/${categoryId}`,
       { include: TRANSLATIONS_SIDELOAD },
-      brandId,
+      brandHost,
     );
     return { categories: [category], hasMore: false };
   }
@@ -358,7 +358,7 @@ const fetchGapCategories = async (
     token,
     '/categories',
     { ...buildCursorParams(MAX_PAGE_SIZE, undefined), include: TRANSLATIONS_SIDELOAD },
-    brandId,
+    brandHost,
   );
   const categories = response.categories ?? [];
   return { categories, hasMore: extractPaginationMeta(response, categories.length).has_more };
@@ -600,7 +600,16 @@ const assertReorderParamsCoherent = (
 };
 
 export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
-  const { subdomain, brandId, getToken } = ctx;
+  const { subdomain, brandId, resolveBrandHost, getToken } = ctx;
+
+  // Brand id -> Help Center host, honouring the deploy lock: resolveBrandId
+  // enforces the lock (mismatched per-call ids throw here, before any
+  // request), then the cached resolver maps the id to its host. Undefined
+  // means the account default brand — no resolution, no extra request.
+  const resolveHost = async (brand_id: number | undefined): Promise<string | undefined> => {
+    const id = resolveBrandId(brand_id, brandId);
+    return id === undefined ? undefined : resolveBrandHost(id);
+  };
 
   // A section's articles in the EFFECTIVE display order an end user sees (no
   // sort_by), paginated to completion so reorder and its verification see all.
@@ -612,7 +621,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
     sectionId: number,
     locale: string,
     token: string,
-    effectiveBrand?: number,
+    effectiveBrandHost?: string,
   ): Promise<OrderedArticle[]> => {
     const order: OrderedArticle[] = [];
     let cursor: string | undefined;
@@ -622,7 +631,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         token,
         `/${locale}/sections/${sectionId}/articles`,
         buildCursorParams(MAX_PAGE_SIZE, cursor),
-        effectiveBrand,
+        effectiveBrandHost,
       );
       const articles = response.articles ?? [];
       for (const article of articles) {
@@ -643,7 +652,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
     articleId: number,
     sectionId: number,
     token: string,
-    effectiveBrand?: number,
+    effectiveBrandHost?: string,
   ): Promise<void> => {
     if (effective.some((a) => a.id === referenceArticleId)) return;
 
@@ -654,7 +663,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         token,
         `/articles/${referenceArticleId}`,
         undefined,
-        effectiveBrand,
+        effectiveBrandHost,
       );
       detail = `is in section #${ref.section_id}, not section #${sectionId}`;
     } catch {
@@ -672,7 +681,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
     writes: ReorderWrite[],
     articleId: number,
     token: string,
-    effectiveBrand?: number,
+    effectiveBrandHost?: string,
   ): Promise<number> => {
     let applied = 0;
     for (const write of writes) {
@@ -682,7 +691,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/articles/${write.id}`,
           { article: { position: write.position } },
-          effectiveBrand,
+          effectiveBrandHost,
         );
         applied += 1;
       } catch (error) {
@@ -715,8 +724,21 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const token = await getToken();
         // Brands live on the account-wide Support API, never under the
         // brand-scoped Help Center base — this call stays unscoped on purpose.
-        const response = await zendeskGet<{ brands: ZendeskBrand[] }>(subdomain, token, '/brands');
-        const brands = response.brands ?? [];
+        // The endpoint cursor-paginates; follow it so a large account does not
+        // silently hide the brand a caller is looking for.
+        const brands: ZendeskBrand[] = [];
+        let cursor: string | undefined;
+        do {
+          const response = await zendeskGet<ZendeskListResponse<ZendeskBrand>>(
+            subdomain,
+            token,
+            '/brands',
+            buildCursorParams(MAX_PAGE_SIZE, cursor),
+          );
+          brands.push(...(response.brands ?? []));
+          const meta = extractPaginationMeta(response, brands.length);
+          cursor = meta.has_more && meta.after_cursor ? meta.after_cursor : undefined;
+        } while (cursor);
         return {
           content: [
             {
@@ -772,7 +794,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const p: Record<string, string> = { query, ...buildOffsetParams(per_page, page) };
         if (locale) p['locale'] = locale;
         const response = await helpCenterGet<ZendeskListResponse<ZendeskArticle>>(
@@ -780,7 +802,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           '/articles/search',
           p,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -821,16 +843,21 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const path = locale ? `/${locale}/articles/${article_id}` : `/articles/${article_id}`;
         const { article } = await helpCenterGet<{ article: ZendeskArticle }>(
           subdomain,
           token,
           path,
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
-        const translations = await listTranslations(subdomain, token, article_id, effectiveBrand);
+        const translations = await listTranslations(
+          subdomain,
+          token,
+          article_id,
+          effectiveBrandHost,
+        );
         const hint = largeArticleHint(article.body, parseSections(article.body).length);
         const text =
           (hint ?? '') +
@@ -890,14 +917,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const path = `${localePrefix(locale)}/categories`;
         const response = await helpCenterGet<ZendeskListResponse<ZendeskCategory>>(
           subdomain,
           token,
           path,
           buildCursorParams(page_size, cursor),
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const categories = response.categories ?? [];
         return {
@@ -963,13 +990,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const response = await helpCenterGet<ZendeskListResponse<ZendeskSection>>(
           subdomain,
           token,
           sectionListPath(category_id, locale),
           buildCursorParams(page_size, cursor),
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const sections = response.sections ?? [];
         return {
@@ -1061,13 +1088,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const response = await helpCenterGet<ZendeskListResponse<ZendeskArticle>>(
           subdomain,
           token,
           articleListPath(section_id, locale),
           { ...buildCursorParams(page_size, cursor), sort_by, sort_order },
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const articles = response.articles ?? [];
         if (!include_translations) {
@@ -1090,7 +1117,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
               subdomain,
               token,
               article.id,
-              effectiveBrand,
+              effectiveBrandHost,
             );
             const locales = translations.map((t) => t.locale).join(', ');
             return `${formatArticleSummary(article)}\n- **Translations**: ${locales}`;
@@ -1123,12 +1150,12 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { brand_id } = params as { brand_id?: number };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { articles, truncated, pagesScanned } = await fetchPromotedArticles(
           subdomain,
           token,
           ARTICLE_RESOURCES_SCAN_MAX_PAGES,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const header = `Promoted (featured) articles: ${articles.length}`;
         const body = articles.length
@@ -1172,8 +1199,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { article_id, brand_id } = params as { article_id: number; brand_id?: number };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
-        const translations = await listTranslations(subdomain, token, article_id, effectiveBrand);
+        const effectiveBrandHost = await resolveHost(brand_id);
+        const translations = await listTranslations(
+          subdomain,
+          token,
+          article_id,
+          effectiveBrandHost,
+        );
         return {
           content: [
             {
@@ -1225,13 +1257,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { translation } = await helpCenterPost<{ translation: ZendeskTranslation }>(
           subdomain,
           token,
           `/articles/${article_id}/translations`,
           { translation: { locale, title, body, draft } },
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -1291,13 +1323,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         } & Record<string, unknown>;
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { translation } = await helpCenterPut<{ translation: ZendeskTranslation }>(
           subdomain,
           token,
           `/articles/${article_id}/translations/${locale}`,
           { translation: updates },
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -1334,14 +1366,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { section_id, brand_id } = params as { section_id: number; brand_id?: number };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const translations = await listNodeTranslations(
           subdomain,
           token,
           'sections',
           section_id,
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -1383,14 +1415,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { category_id, brand_id } = params as { category_id: number; brand_id?: number };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const translations = await listNodeTranslations(
           subdomain,
           token,
           'categories',
           category_id,
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -1442,22 +1474,22 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const [locales, categoryScope, sectionsRes] = await Promise.all([
           helpCenterGet<ZendeskLocalesResponse>(
             subdomain,
             token,
             '/locales',
             undefined,
-            effectiveBrand,
+            effectiveBrandHost,
           ),
-          fetchGapCategories(subdomain, token, category_id, effectiveBrand),
+          fetchGapCategories(subdomain, token, category_id, effectiveBrandHost),
           helpCenterGet<ZendeskListResponse<ZendeskSection>>(
             subdomain,
             token,
             sectionListPath(category_id, undefined),
             { ...buildCursorParams(MAX_PAGE_SIZE, undefined), include: TRANSLATIONS_SIDELOAD },
-            effectiveBrand,
+            effectiveBrandHost,
           ),
         ]);
 
@@ -1550,14 +1582,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { translation, created } = await upsertNodeTranslation(
           subdomain,
           token,
           'sections',
           section_id,
           input,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -1625,14 +1657,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { translation, created } = await upsertNodeTranslation(
           subdomain,
           token,
           'categories',
           category_id,
           input,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -1768,13 +1800,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         } & Record<string, unknown>;
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { article } = await helpCenterPost<{ article: ZendeskArticle }>(
           subdomain,
           token,
           `/sections/${section_id}/articles`,
           { article: articleData },
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -1861,13 +1893,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         } & Record<string, unknown>;
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { article } = await helpCenterPut<{ article: ZendeskArticle }>(
           subdomain,
           token,
           `/articles/${article_id}`,
           { article: updates },
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -1945,7 +1977,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const needsReference = needsReferenceArticle(target);
 
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
 
         // Resolve the article's section (also validates the article exists).
         const { article } = await helpCenterGet<{ article: ZendeskArticle }>(
@@ -1953,7 +1985,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/articles/${article_id}`,
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const sectionId = article.section_id;
         // Scope every section listing to the article's locale — the endpoint
@@ -1961,7 +1993,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         // locale-dependent (see fetchSectionOrder).
         const locale = article.source_locale;
 
-        const effective = await fetchSectionOrder(sectionId, locale, token, effectiveBrand);
+        const effective = await fetchSectionOrder(sectionId, locale, token, effectiveBrandHost);
 
         // Guarding on the value, not the derived flag: after
         // assertReorderParamsCoherent the two are equivalent, and this one
@@ -1973,7 +2005,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
             article_id,
             sectionId,
             token,
-            effectiveBrand,
+            effectiveBrandHost,
           );
         }
 
@@ -2013,10 +2045,10 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           };
         }
 
-        const applied = await applyPositionWrites(writes, article_id, token, effectiveBrand);
+        const applied = await applyPositionWrites(writes, article_id, token, effectiveBrandHost);
 
         // Verify the move took effect (the definitive auto-sort check).
-        const after = await fetchSectionOrder(sectionId, locale, token, effectiveBrand);
+        const after = await fetchSectionOrder(sectionId, locale, token, effectiveBrandHost);
         if (!isPlacedAsRequested(after, article_id, target, reference_article_id)) {
           return { content: [{ type: 'text', text: autoSortNotice(sectionId, applied) }] };
         }
@@ -2065,8 +2097,8 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           );
         }
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
-        await helpCenterDelete(subdomain, token, `/articles/${article_id}`, effectiveBrand);
+        const effectiveBrandHost = await resolveHost(brand_id);
+        await helpCenterDelete(subdomain, token, `/articles/${article_id}`, effectiveBrandHost);
         return {
           content: [
             {
@@ -2210,13 +2242,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { brand_id } = params as { brand_id?: number };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const response = await helpCenterGet<{ labels: ZendeskLabel[]; count: number }>(
           subdomain,
           token,
           '/articles/labels',
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         return {
           content: [
@@ -2252,13 +2284,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { brand_id } = params as { brand_id?: number };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         let response: { user_segments: ZendeskUserSegment[]; count: number };
         try {
           response = await helpCenterGet<{
             user_segments: ZendeskUserSegment[];
             count: number;
-          }>(subdomain, token, '/user_segments', undefined, effectiveBrand);
+          }>(subdomain, token, '/user_segments', undefined, effectiveBrandHost);
         } catch (error) {
           // GET /help_center/user_segments requires Guide-admin / Help Center manager
           // rights. Rewrite the generic 403 into actionable guidance with the
@@ -2309,11 +2341,11 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { article_id, brand_id } = params as { article_id: number; brand_id?: number };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const response = await helpCenterGet<{
           article_attachments: ZendeskArticleAttachment[];
           count: number;
-        }>(subdomain, token, `/articles/${article_id}/attachments`, undefined, effectiveBrand);
+        }>(subdomain, token, `/articles/${article_id}/attachments`, undefined, effectiveBrandHost);
         const attachments = response.article_attachments ?? [];
         if (attachments.length === 0) {
           return {
@@ -2363,13 +2395,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { article } = await helpCenterGet<{ article: ZendeskArticle }>(
           subdomain,
           token,
           `/articles/${article_id}`,
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const effectiveLocale = locale ?? article.source_locale;
         const { translation } = await helpCenterGet<{ translation: ZendeskTranslation }>(
@@ -2377,9 +2409,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/articles/${article_id}/translations/${effectiveLocale}`,
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
-        const translations = await listTranslations(subdomain, token, article_id, effectiveBrand);
+        const translations = await listTranslations(
+          subdomain,
+          token,
+          article_id,
+          effectiveBrandHost,
+        );
         const sections = parseSections(translation.body);
 
         const outlineLines = sections.length
@@ -2445,13 +2482,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { translation } = await helpCenterGet<{ translation: ZendeskTranslation }>(
           subdomain,
           token,
           `/articles/${article_id}/translations/${locale}`,
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const sections = parseSections(translation.body);
         const section = sections[section_index];
@@ -2523,13 +2560,13 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const { translation } = await helpCenterGet<{ translation: ZendeskTranslation }>(
           subdomain,
           token,
           `/articles/${article_id}/translations/${locale}`,
           undefined,
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const newSectionHtml = format === 'markdown' ? markdownToHtml(content) : content;
         const newBody = replaceSectionContent(translation.body, section_index, newSectionHtml);
@@ -2538,7 +2575,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           token,
           `/articles/${article_id}/translations/${locale}`,
           { translation: { body: newBody } },
-          effectiveBrand,
+          effectiveBrandHost,
         );
         const updatedSections = parseSections(updated.body);
         const updatedSection = updatedSections[section_index];
@@ -2582,25 +2619,25 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const [sourceRes, targetRes, translations] = await Promise.all([
           helpCenterGet<{ translation: ZendeskTranslation }>(
             subdomain,
             token,
             `/articles/${article_id}/translations/${source_locale}`,
             undefined,
-            effectiveBrand,
+            effectiveBrandHost,
           ),
           helpCenterGet<{ translation: ZendeskTranslation }>(
             subdomain,
             token,
             `/articles/${article_id}/translations/${target_locale}`,
             undefined,
-            effectiveBrand,
+            effectiveBrandHost,
           ),
           // The `outdated` flag is only exposed on the list endpoint, not on a
           // single-translation GET — same reason get_article_outline lists too.
-          listTranslations(subdomain, token, article_id, effectiveBrand),
+          listTranslations(subdomain, token, article_id, effectiveBrandHost),
         ]);
         const sourceSections = parseSections(sourceRes.translation.body);
         const targetSections = parseSections(targetRes.translation.body);
@@ -2682,14 +2719,14 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           brand_id?: number;
         };
         const token = await getToken();
-        const effectiveBrand = resolveBrandId(brand_id, brandId);
+        const effectiveBrandHost = await resolveHost(brand_id);
         const buffer = Buffer.from(file_base64, 'base64');
         const blob = new Blob([buffer], { type: content_type });
         const formData = new FormData();
         formData.append('file', blob, file_name);
         const { article_attachment } = await helpCenterUpload<{
           article_attachment: ZendeskArticleAttachment;
-        }>(subdomain, token, `/articles/${article_id}/attachments`, formData, effectiveBrand);
+        }>(subdomain, token, `/articles/${article_id}/attachments`, formData, effectiveBrandHost);
         return {
           content: [
             {

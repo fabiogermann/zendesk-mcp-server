@@ -55,7 +55,7 @@ export const fetchPromotedArticles = async (
   subdomain: string,
   token: string,
   maxPages: number = ARTICLE_RESOURCES_SCAN_MAX_PAGES,
-  brandId?: number,
+  brandHost?: string,
 ): Promise<PromotedArticleScan> => {
   const promoted: ZendeskArticle[] = [];
   let cursor: string | undefined;
@@ -68,7 +68,7 @@ export const fetchPromotedArticles = async (
       token,
       '/articles',
       buildCursorParams(MAX_PAGE_SIZE, cursor),
-      brandId,
+      brandHost,
     );
     const articles = response.articles ?? [];
     for (const article of articles) {
@@ -99,7 +99,7 @@ export const fetchArticleMarkdown = async (
   token: string,
   id: number,
   locale?: string,
-  brandId?: number,
+  brandHost?: string,
 ): Promise<string> => {
   const path = locale ? `/${locale}/articles/${id}` : `/articles/${id}`;
   const { article } = await helpCenterGet<{ article: ZendeskArticle }>(
@@ -107,7 +107,7 @@ export const fetchArticleMarkdown = async (
     token,
     path,
     undefined,
-    brandId,
+    brandHost,
   );
   const text = [formatArticleSummary(article), '', htmlToMarkdown(article.body)].join('\n');
   return truncateIfNeeded(
@@ -136,7 +136,7 @@ export const createArticleResourcesProvider = (
   getToken: () => string | Promise<string>,
   subdomain: string,
   onUnauthorized?: () => void,
-  brandId?: number,
+  resolveBrandHost: () => Promise<string | undefined> = () => Promise.resolve(undefined),
 ): ArticleResourcesProvider => {
   let cached: { at: number; promise: Promise<PromotedArticleList> } | undefined;
 
@@ -152,12 +152,12 @@ export const createArticleResourcesProvider = (
       if (cached && now - cached.at < ARTICLE_RESOURCES_TTL_MS) return cached.promise;
 
       const promise = (async () => {
-        const token = await getToken();
+        const [token, brandHost] = await Promise.all([getToken(), resolveBrandHost()]);
         const { articles, truncated } = await fetchPromotedArticles(
           subdomain,
           token,
           ARTICLE_RESOURCES_SCAN_MAX_PAGES,
-          brandId,
+          brandHost,
         );
         // Map to lean refs before caching so the per-session cache holds only the
         // id + title, never the full article bodies from the scan.
@@ -174,8 +174,8 @@ export const createArticleResourcesProvider = (
 
     async readArticle(id) {
       try {
-        const token = await getToken();
-        return await fetchArticleMarkdown(subdomain, token, id, undefined, brandId);
+        const [token, brandHost] = await Promise.all([getToken(), resolveBrandHost()]);
+        return await fetchArticleMarkdown(subdomain, token, id, undefined, brandHost);
       } catch (err) {
         notifyIfUnauthorized(err);
         throw err;

@@ -21,8 +21,10 @@ const SUBDOMAIN = 'testsubdomain';
 const TOKEN = 'test-token';
 
 describe('fetchTopology', () => {
-  it('scopes per-brand Help Center calls to /brands/{id} when a brand id is given', async () => {
-    const brandBase = 'https://testsubdomain.zendesk.com/api/v2/help_center/brands/424242';
+  it('scopes per-brand Help Center calls to the brand host when one is given', async () => {
+    // Zendesk addresses brands by HOST: the brand's own host serves the
+    // standard /api/v2/help_center path and only that brand's content.
+    const brandBase = 'https://brand424242.zendesk.com/api/v2/help_center';
     const seen: string[] = [];
     mswServer.use(
       http.get(`${brandBase}/locales`, ({ request }) => {
@@ -37,24 +39,19 @@ describe('fetchTopology', () => {
         seen.push(request.url);
         return HttpResponse.json({ sections: [MOCK_SECTION] });
       }),
-      // The admin-gated listing also goes brand-scoped (asserted below via
-      // seenUrl); mocked, but not tracked with the tree calls.
-      http.get(`${brandBase}/user_segments`, ({ request }) => {
-        seen.push(request.url);
-        return HttpResponse.json({ user_segments: [], count: 0 });
-      }),
     );
 
-    const data = await fetchTopology(SUBDOMAIN, TOKEN, 424242);
+    const data = await fetchTopology(SUBDOMAIN, TOKEN, 424242, 'brand424242.zendesk.com');
 
-    // Brand-scoped: the tree (locales, categories, sections) AND the
-    // admin-gated segments listing all read under /brands/{id}; permission
-    // groups and the current user are account-wide and keep working.
-    expect(seen).toHaveLength(4);
-    expect(seen.every((url) => url.includes('/help_center/brands/424242/'))).toBe(true);
+    // Brand-scoped: the tree (locales, categories, sections) is read from the
+    // brand host. User segments, permission groups and the current user are
+    // account-wide and deliberately NOT brand-scoped.
+    expect(seen).toHaveLength(3);
+    expect(seen.every((url) => url.startsWith('https://brand424242.zendesk.com/'))).toBe(true);
     expect(data.brandId).toBe(424242);
     expect(data.categories.map((c) => c.id)).toEqual([800]);
     expect(data.sections.map((s) => s.id)).toEqual([600]);
+    expect(data.userSegments.map((s) => s.id)).toEqual([15001]);
     expect(data.permissionGroups.map((g) => g.id)).toEqual([12001]);
     expect(data.currentUser.id).toBe(9999);
   });

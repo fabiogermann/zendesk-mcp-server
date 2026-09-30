@@ -130,15 +130,13 @@ export const LARGE_ARTICLE_SECTION_COUNT = 4;
 
 export const getBaseUrl = (subdomain: string): string => `https://${subdomain}.zendesk.com/api/v2`;
 
-// The Help Center API is per-brand: every Guide endpoint exists both under the
-// account default brand (/help_center/...) and, on multi-brand accounts, under
-// an explicit brand (/help_center/brands/{id}/...) with identical shapes.
-// `brandId` unset keeps the default-brand URL, so a single-brand account sees
-// no behaviour change.
-export const getHelpCenterBaseUrl = (subdomain: string, brandId?: number): string =>
-  brandId === undefined
-    ? `https://${subdomain}.zendesk.com/api/v2/help_center`
-    : `https://${subdomain}.zendesk.com/api/v2/help_center/brands/${brandId}`;
+// Zendesk addresses multi-brand Help Centers by HOST, not by a path segment:
+// the brand's own host (`host_mapping` when set, else the brand's zendesk.com
+// subdomain) serves the standard /api/v2/help_center path, and only that
+// brand's content. `brandHost` unset keeps the account-default URL, so a
+// single-brand account sees no behaviour change.
+export const getHelpCenterBaseUrl = (subdomain: string, brandHost?: string): string =>
+  `https://${brandHost ?? `${subdomain}.zendesk.com`}/api/v2/help_center`;
 
 export const getOAuthUrls = (subdomain: string) => ({
   authorizeUrl: `https://${subdomain}.zendesk.com/oauth/authorizations/new`,

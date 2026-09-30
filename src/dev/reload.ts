@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import { createBrandHostResolver } from '../client/brands';
 import type { Config } from '../config';
 import { createServerShell, registerToolset } from '../server';
 import { createAllTools, type ToolContext, type ToolDefinition } from '../tools/index';
@@ -68,7 +69,12 @@ export const createReloadableServer = (
   loadTools: (ctx: ToolContext) => Promise<ToolDefinition[]> = loadFreshTools,
 ): { server: McpServer; reload: () => Promise<number> } => {
   const server = createServerShell(config, logger);
-  const ctx: ToolContext = { subdomain: config.subdomain, brandId: config.brandId, getToken };
+  const ctx: ToolContext = {
+    subdomain: config.subdomain,
+    brandId: config.brandId,
+    resolveBrandHost: createBrandHostResolver(config.subdomain, getToken),
+    getToken,
+  };
   const params = { config, getToken, onUnauthorized, logger };
 
   // The last generation registered successfully — both the handle (to dispose)

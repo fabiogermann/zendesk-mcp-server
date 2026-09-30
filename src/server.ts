@@ -1,5 +1,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import { createBrandHostResolver } from './client/brands';
 import { ZendeskApiError } from './client/zendesk-api';
 import type { Config } from './config';
 import { ARTICLE_RESOURCES_SCAN_MAX_PAGES } from './constants';
@@ -203,6 +204,23 @@ export interface ToolsetParams {
 }
 
 /**
+ * Lazily resolve the deploy-locked brand's Help Center host. The resolver is
+ * cached per (subdomain, brandId) in client/brands, so the topology and
+ * article resources share one resolution; it only fires when a lock is set.
+ * Providers await it per read (cheap after the first), since registerToolset
+ * is synchronous and cannot resolve the host up front.
+ */
+const lockedBrandHostResolver = (
+  config: Config,
+  getToken: () => string | Promise<string>,
+): (() => Promise<string | undefined>) => {
+  const brandId = config.brandId;
+  if (brandId === undefined) return () => Promise.resolve(undefined);
+  const resolver = createBrandHostResolver(config.subdomain, getToken);
+  return () => resolver(brandId);
+};
+
+/**
  * Registers one generation of the toolset (mode/filters applied) plus the
  * optional topology resource onto an existing server, and returns a handle
  * whose `dispose()` removes exactly what this call added. When the SDK server
@@ -313,6 +331,7 @@ export const registerToolset = (
         config.subdomain,
         onUnauthorized,
         config.brandId,
+        lockedBrandHostResolver(config, getToken),
       );
       registered.push(
         server.registerResource(
@@ -343,7 +362,7 @@ export const registerToolset = (
         getToken,
         config.subdomain,
         onUnauthorized,
-        config.brandId,
+        lockedBrandHostResolver(config, getToken),
       );
       const listPromotedEnabled = promotedArticlesEnabled(config);
       const template = new ResourceTemplate(articleResourceUriTemplate(config), {
@@ -426,7 +445,13 @@ export const createMcpServer = (
   onUnauthorized?: () => void,
 ): McpServer => {
   const server = createServerShell(config, logger);
-  const tools = createAllTools({ subdomain: config.subdomain, brandId: config.brandId, getToken });
+  const resolveBrandHost = createBrandHostResolver(config.subdomain, getToken);
+  const tools = createAllTools({
+    subdomain: config.subdomain,
+    brandId: config.brandId,
+    resolveBrandHost,
+    getToken,
+  });
   registerToolset(server, { config, getToken, onUnauthorized, logger }, tools);
   return server;
 };

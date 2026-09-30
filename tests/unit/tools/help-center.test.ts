@@ -5,6 +5,7 @@ import type { ToolContext } from '../../../src/tools/definitions';
 import { createHelpCenterTools } from '../../../src/tools/help-center';
 import {
   MOCK_ARTICLE,
+  MOCK_BRAND,
   MOCK_CATEGORY,
   MOCK_CATEGORY_TRANSLATION,
   MOCK_SECTION,
@@ -16,7 +17,11 @@ import {
 } from '../../msw-handlers';
 import { mswServer } from '../../setup';
 
-const ctx: ToolContext = { subdomain: 'testsubdomain', getToken: () => 'test-token' };
+const ctx: ToolContext = {
+  subdomain: 'testsubdomain',
+  resolveBrandHost: () => Promise.resolve('brand424242.zendesk.com'),
+  getToken: () => 'test-token',
+};
 const HC_BASE = 'https://testsubdomain.zendesk.com/api/v2/help_center';
 
 const findTool = (name: string) => {
@@ -43,6 +48,30 @@ describe('help center tools', () => {
     it('is read-only', () => {
       expect(findTool('list_brands').readOnly).toBe(true);
     });
+
+    it('follows cursor pagination so later brands are not dropped', async () => {
+      const base = 'https://testsubdomain.zendesk.com/api/v2';
+      mswServer.use(
+        http.get(`${base}/brands`, ({ request }) => {
+          const url = new URL(request.url);
+          if (url.searchParams.get('page[after]') === 'cursor2') {
+            return HttpResponse.json({
+              brands: [{ ...MOCK_BRAND, id: 2, name: 'Second brand' }],
+              meta: { has_more: false, after_cursor: '' },
+            });
+          }
+          return HttpResponse.json({
+            brands: [{ ...MOCK_BRAND, id: 1, name: 'First brand' }],
+            meta: { has_more: true, after_cursor: 'cursor2' },
+          });
+        }),
+      );
+      const tool = findTool('list_brands');
+      const result = await tool.handler({});
+      const text = result.content[0]?.text ?? '';
+      expect(text).toContain('First brand');
+      expect(text).toContain('Second brand');
+    });
   });
 
   describe('brand scoping (--brand-id)', () => {
@@ -51,18 +80,15 @@ describe('help center tools', () => {
     it('scopes Help Center reads to /brands/{id}', async () => {
       let seenUrl = '';
       mswServer.use(
-        http.get(
-          'https://testsubdomain.zendesk.com/api/v2/help_center/brands/424242/categories',
-          ({ request }) => {
-            seenUrl = request.url;
-            return HttpResponse.json({ categories: [MOCK_CATEGORY] });
-          },
-        ),
+        http.get('https://brand424242.zendesk.com/api/v2/help_center/categories', ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json({ categories: [MOCK_CATEGORY] });
+        }),
       );
       const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_categories');
       if (!tool) throw new Error('list_categories not found');
       const result = await tool.handler({});
-      expect(seenUrl).toContain('/help_center/brands/424242/categories');
+      expect(seenUrl).toContain('/help_center/categories');
       expect(result.content[0]?.text).toContain('General');
     });
 
@@ -70,7 +96,7 @@ describe('help center tools', () => {
       let seenUrl = '';
       mswServer.use(
         http.put(
-          'https://testsubdomain.zendesk.com/api/v2/help_center/brands/424242/articles/9001',
+          'https://brand424242.zendesk.com/api/v2/help_center/articles/9001',
           ({ request }) => {
             seenUrl = request.url;
             return HttpResponse.json({ article: MOCK_ARTICLE });
@@ -80,7 +106,7 @@ describe('help center tools', () => {
       const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'update_article');
       if (!tool) throw new Error('update_article not found');
       await tool.handler({ article_id: 9001, promoted: true });
-      expect(seenUrl).toContain('/help_center/brands/424242/articles/9001');
+      expect(seenUrl).toContain('/help_center/articles/9001');
     });
 
     it('leaves list_brands itself unscoped (brands live on the Support API)', async () => {
@@ -109,17 +135,19 @@ describe('help center tools', () => {
     it('honours a per-call brand_id when no lock is configured', async () => {
       let seenUrl = '';
       mswServer.use(
-        http.get(
-          'https://testsubdomain.zendesk.com/api/v2/help_center/brands/777777/categories',
-          ({ request }) => {
-            seenUrl = request.url;
-            return HttpResponse.json({ categories: [MOCK_CATEGORY] });
-          },
-        ),
+        http.get('https://brand777777.zendesk.com/api/v2/help_center/categories', ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json({ categories: [MOCK_CATEGORY] });
+        }),
       );
-      const tool = findTool('list_categories');
+      const unlockedCtx: ToolContext = {
+        ...ctx,
+        resolveBrandHost: () => Promise.resolve('brand777777.zendesk.com'),
+      };
+      const tool = createHelpCenterTools(unlockedCtx).find((t) => t.name === 'list_categories');
+      if (!tool) throw new Error('list_categories not found');
       const result = await tool.handler({ brand_id: 777777 });
-      expect(seenUrl).toContain('/help_center/brands/777777/categories');
+      expect(seenUrl).toContain('/help_center/categories');
       expect(result.content[0]?.text).toContain('General');
     });
 
@@ -132,18 +160,15 @@ describe('help center tools', () => {
     it('accepts a per-call brand_id equal to the deploy lock', async () => {
       let seenUrl = '';
       mswServer.use(
-        http.get(
-          'https://testsubdomain.zendesk.com/api/v2/help_center/brands/424242/categories',
-          ({ request }) => {
-            seenUrl = request.url;
-            return HttpResponse.json({ categories: [MOCK_CATEGORY] });
-          },
-        ),
+        http.get('https://brand424242.zendesk.com/api/v2/help_center/categories', ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json({ categories: [MOCK_CATEGORY] });
+        }),
       );
       const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_categories');
       if (!tool) throw new Error('list_categories not found');
       await tool.handler({ brand_id: 424242 });
-      expect(seenUrl).toContain('/help_center/brands/424242/categories');
+      expect(seenUrl).toContain('/help_center/categories');
     });
   });
 
