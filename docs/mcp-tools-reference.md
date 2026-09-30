@@ -38,9 +38,15 @@ out every `write` tool before the proxies are built.
 <details>
 <summary><strong>Help Center</strong></summary>
 
+Every brand-scoped Help Center tool (all of them except `list_brands`,
+`list_permission_groups`, `list_content_tags` and `create_content_tag`) takes an
+optional `brand_id` parameter: without `--brand-id` it picks the brand for that
+one call; with `--brand-id` (a hard lock) only the locked value is accepted.
+Ids come from `list_brands`.
+
 | Tool | Description | Mode |
 |------|-------------|------|
-| `list_brands` | List the account's brands — the discovery source for `--brand-id` on multi-brand accounts | read |
+| `list_brands` | List the account's brands — the discovery source for `--brand-id` / per-call `brand_id` on multi-brand accounts | read |
 | `search_articles` | Full-text search across Help Center articles | read |
 | `get_article` | Retrieve article by ID with full HTML body | read |
 | `get_article_outline` | Compact outline of an article (sections + available translations) | read |

@@ -560,6 +560,18 @@ export const MOCK_LOCALES = {
   default_locale: 'en-us',
 };
 
+// A brand as GET /api/v2/brands returns it — kept in sync with the /brands
+// handler below.
+export const MOCK_BRAND = {
+  id: 360001234567,
+  name: 'Main brand',
+  brand_url: 'https://testsubdomain.zendesk.com',
+  subdomain: 'testsubdomain',
+  host_mapping: null,
+  default: true,
+  active: true,
+};
+
 export const MOCK_ARTICLE_ATTACHMENT = {
   id: 20001,
   file_name: 'screenshot.png',
@@ -830,21 +842,7 @@ export const manyContentTagsHandler = http.get(`${BASE}/guide/content_tags`, () 
 export const handlers = [
   // Brands (Support API): the discovery source for --brand-id. Shaped per the
   // Zendesk Brands API reference.
-  http.get(`${BASE}/brands`, () =>
-    HttpResponse.json({
-      brands: [
-        {
-          id: 360001234567,
-          name: 'Main brand',
-          brand_url: 'https://testsubdomain.zendesk.com',
-          subdomain: 'testsubdomain',
-          host_mapping: null,
-          default: true,
-          active: true,
-        },
-      ],
-    }),
-  ),
+  http.get(`${BASE}/brands`, () => HttpResponse.json({ brands: [MOCK_BRAND] })),
 
   // Brand-scoped Help Center: the base the brand-scoped client helpers build
   // when a --brand-id is configured. Only the integration scenario exercises it.

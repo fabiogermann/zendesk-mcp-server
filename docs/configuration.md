@@ -20,7 +20,9 @@ Options:
   --mode <mode>           single | namespace (default) | all
   --brand-id <id>         Restrict Help Center operations to one brand
                           (multi-brand accounts; default: account default
-                          brand). Also ZENDESK_BRAND_ID.
+                          brand). Hard lock: a per-call brand_id equal to
+                          it passes, any other is rejected. Also
+                          ZENDESK_BRAND_ID.
   --namespace <ns>        Filter by namespace (repeatable): tickets, help_center,
                           users, requests. Defaults to tickets + help_center +
                           users; `requests` (the end-user surface) is opt-in and
@@ -233,6 +235,15 @@ article resources — to one brand on a multi-brand account, via the
 brand-scoped Guide API (`/api/v2/help_center/brands/{id}/...`). Also `--brand-id`.
 Brand ids come from the `list_brands` tool or the Zendesk Brands API. Tickets,
 users and search are account-wide and unaffected.
+
+The lock is a **hard lock**: every brand-scoped Help Center tool also takes an
+optional `brand_id` parameter, and with the lock set only that same value is
+accepted — any other is rejected with an error naming `--brand-id`. Without the
+lock, `brand_id` overrides the account default brand for that call, so one
+server can address several brands on the same connection. With neither, the
+account default brand is used. The account-wide Guide tools (`list_brands`,
+`list_permission_groups`, `list_content_tags`, `create_content_tag`) take no
+`brand_id` — they have no brand dimension.
 
 ### `OAUTH_CALLBACK_PORT`
 **Required:** no · **Default:** `27439`
