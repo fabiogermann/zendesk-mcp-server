@@ -85,32 +85,82 @@ import type { ToolContext, ToolDefinition } from './definitions';
 const ARTICLE_ID_DESC =
   'Article ID — the numeric id of the Help Center article. Obtain it from list_articles or search_articles.';
 
-// Shared `brand_id` input field for every brand-scoped Help Center tool.
-const BRAND_ID_FIELD = z
-  .number()
-  .int()
-  .optional()
-  .describe(
-    'Brand ID of the Help Center to operate on (from list_brands). When the server was started with --brand-id, only that value is accepted — any other is rejected. When the server has no brand lock, this overrides the account default brand for this call.',
-  );
+// Shared `brand_id` input field factory. In unset/single mode the field is
+// ABSENT from the schema (strict parsing rejects it); in multi/all mode it is
+// REQUIRED (not .optional()) and described with the allowed set.
+const brandIdField = (brandIds: string[] | undefined) => {
+  if (!brandIds || brandIds.length === 0) return undefined;
+  if (brandIds.length === 1 && brandIds[0] !== 'all') return undefined;
+  const description =
+    brandIds[0] === 'all'
+      ? 'Brand ID of the Help Center to operate on. Required: any brand from list_brands.'
+      : `Brand ID of the Help Center to operate on. Required: one of ${brandIds.join(', ')}.`;
+  return z.number().int().describe(description);
+};
 
 /**
- * Resolve which brand a call targets: the per-call override when given, else the
- * deploy-time lock (`--brand-id`) when set, else the account default brand
- * (undefined → no brand host override). A per-call value that contradicts the
- * deploy lock is rejected, naming the flag that forbids it.
+ * Resolve which brand a call targets, enforcing the deploy allow-list.
+ *
+ * - unset: no brand override; a per-call brand_id is rejected (schema has no
+ *   field for it, so this is a backstop for hand-crafted calls).
+ * - single: the configured entry is the only brand; ANY per-call brand_id is
+ *   rejected (hard lock, no escape — the schema has no field for it).
+ * - multi: brand_id is REQUIRED; the per-call id is resolved and must match an
+ *   allowed entry by id or resolved subdomain.
+ * - all: brand_id is REQUIRED; any existing brand passes (validated by the
+ *   resolver).
+ *
+ * Returns the brand's subdomain, or undefined for the account default.
  */
-export const resolveBrandId = (
+export const resolveBrand = async (
   perCall: number | undefined,
-  locked: number | undefined,
-): number | undefined => {
-  if (perCall === undefined) return locked;
-  if (locked !== undefined && perCall !== locked) {
+  brandIds: string[] | undefined,
+  resolveSubdomain: (idOrSubdomain: string) => Promise<string>,
+): Promise<string | undefined> => {
+  if (!brandIds || brandIds.length === 0) {
+    if (perCall !== undefined) {
+      throw new Error(
+        'brand_id is not accepted: this server was started without --brand-ids, so it targets the account default brand.',
+      );
+    }
+    return undefined;
+  }
+
+  const isAll = brandIds.length === 1 && brandIds[0] === 'all';
+  const isSingle = brandIds.length === 1 && !isAll;
+
+  if (isSingle) {
+    const locked = brandIds[0] as string;
+    // Hard lock: the schema carries no brand_id field at all, so reaching here
+    // with one means a hand-crafted call — rejected, no escape.
+    if (perCall !== undefined) {
+      throw new Error(
+        `brand_id is not accepted: this server was started with --brand-ids ${locked}, which locks every Help Center operation to that brand. Omit brand_id.`,
+      );
+    }
+    return resolveSubdomain(locked);
+  }
+
+  // multi or all: brand_id is required.
+  if (perCall === undefined) {
     throw new Error(
-      `brand_id ${perCall} is not allowed: this server was started with --brand-id ${locked}, which locks every Help Center operation to that brand. Omit brand_id, or pass ${locked}.`,
+      `brand_id is required: this server was started with --brand-ids ${brandIds.join(', ')}, so every brand-scoped Help Center call must name one.`,
     );
   }
-  return perCall;
+  const resolved = await resolveSubdomain(String(perCall));
+  if (isAll) return resolved;
+  // multi: check membership by id or resolved subdomain.
+  const allowed = new Set<string>();
+  for (const entry of brandIds) {
+    allowed.add(entry);
+    allowed.add(await resolveSubdomain(entry));
+  }
+  if (!allowed.has(String(perCall)) && !allowed.has(resolved)) {
+    throw new Error(
+      `brand_id ${perCall} is not allowed: this server was started with --brand-ids ${brandIds.join(', ')}. Allowed: ${[...allowed].join(', ')}.`,
+    );
+  }
+  return resolved;
 };
 
 // The article `translations` list endpoint, shared by every read tool that
@@ -599,16 +649,89 @@ const assertReorderParamsCoherent = (
   }
 };
 
-export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
-  const { subdomain, brandId, resolveBrandHost, getToken } = ctx;
+/**
+ * Build the `list_brands` tool when the server runs in multi/all mode; an empty
+ * array otherwise. It is the discovery source for the required per-call
+ * `brand_id`: in single-lock or unset mode the brand is implicit, the schemas
+ * carry no `brand_id` field, and the tool stays hidden. In multi mode (not
+ * 'all') the listing is filtered to the allowed brands.
+ */
+const createListBrandsTool = (ctx: ToolContext): ToolDefinition[] => {
+  const { subdomain, brandIds, getToken } = ctx;
+  if (brandIds === undefined) return [];
+  const isAll = brandIds.length === 1 && brandIds[0] === 'all';
+  if (brandIds.length === 1 && !isAll) return [];
+  return [
+    {
+      name: 'list_brands',
+      namespace: 'help_center',
+      readOnly: true,
+      title: 'List Zendesk Brands',
+      description:
+        "List the Zendesk account's brands (id, name, URL, default/active flags) from the Support API. Multi-brand Guide accounts have one Help Center per brand: find the brand id here, then pass it as brand_id to any Help Center tool. Unneeded on single-brand accounts — the default brand is implicit.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      handler: async () => {
+        const token = await getToken();
+        // Brands live on the account-wide Support API, never under the
+        // brand-scoped Help Center base — this call stays unscoped on purpose.
+        // The endpoint cursor-paginates; follow it so a large account does not
+        // silently hide the brand a caller is looking for.
+        const brands: ZendeskBrand[] = [];
+        let cursor: string | undefined;
+        do {
+          const response = await zendeskGet<ZendeskListResponse<ZendeskBrand>>(
+            subdomain,
+            token,
+            '/brands',
+            buildCursorParams(MAX_PAGE_SIZE, cursor),
+          );
+          brands.push(...(response.brands ?? []));
+          const meta = extractPaginationMeta(response, brands.length);
+          cursor = meta.has_more && meta.after_cursor ? meta.after_cursor : undefined;
+        } while (cursor);
+        const visible = isAll
+          ? brands
+          : brands.filter((b) => brandIds.includes(String(b.id)) || brandIds.includes(b.subdomain));
+        return {
+          content: [
+            {
+              type: 'text',
+              text: formatList(
+                visible,
+                formatBrand,
+                undefined,
+                'Pass a brand id as brand_id to any Help Center tool to operate on that brand.',
+              ),
+            },
+          ],
+        };
+      },
+    },
+  ];
+};
 
-  // Brand id -> Help Center host, honouring the deploy lock: resolveBrandId
-  // enforces the lock (mismatched per-call ids throw here, before any
-  // request), then the cached resolver maps the id to its host. Undefined
-  // means the account default brand — no resolution, no extra request.
+export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
+  const { subdomain, brandIds, resolveBrandSubdomain, getToken } = ctx;
+  const brandIdSchema = brandIdField(brandIds);
+  // Spread of an empty object adds no field: in unset/single mode the schemas
+  // carry no brand_id at all (strict parsing then rejects it); in multi/all
+  // mode this one object holds the REQUIRED field shared by every schema below.
+  const brandIdPart: Record<string, z.ZodType> = brandIdSchema ? { brand_id: brandIdSchema } : {};
+
+  // Brand id-or-subdomain -> Help Center host, honouring the deploy allow-list:
+  // resolveBrand enforces it (mismatched per-call ids throw here, before any
+  // request), then the cached resolver maps the entry to its subdomain and the
+  // host is built from it. Undefined means the account default brand — no
+  // resolution, no extra request.
   const resolveHost = async (brand_id: number | undefined): Promise<string | undefined> => {
-    const id = resolveBrandId(brand_id, brandId);
-    return id === undefined ? undefined : resolveBrandHost(id);
+    const sub = await resolveBrand(brand_id, brandIds, resolveBrandSubdomain);
+    return sub === undefined ? undefined : `${sub}.zendesk.com`;
   };
 
   // A section's articles in the EFFECTIVE display order an end user sees (no
@@ -706,54 +829,11 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
   };
 
   return [
-    {
-      name: 'list_brands',
-      namespace: 'help_center',
-      readOnly: true,
-      title: 'List Zendesk Brands',
-      description:
-        "List the Zendesk account's brands (id, name, URL, default/active flags) from the Support API. Multi-brand Guide accounts have one Help Center per brand: find the brand id here, then start the server with --brand-id to scope every Help Center operation (articles, sections, categories, translations, topology) to that brand. Unneeded on single-brand accounts — the default brand is implicit.",
-      inputSchema: z.object({}),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-      handler: async () => {
-        const token = await getToken();
-        // Brands live on the account-wide Support API, never under the
-        // brand-scoped Help Center base — this call stays unscoped on purpose.
-        // The endpoint cursor-paginates; follow it so a large account does not
-        // silently hide the brand a caller is looking for.
-        const brands: ZendeskBrand[] = [];
-        let cursor: string | undefined;
-        do {
-          const response = await zendeskGet<ZendeskListResponse<ZendeskBrand>>(
-            subdomain,
-            token,
-            '/brands',
-            buildCursorParams(MAX_PAGE_SIZE, cursor),
-          );
-          brands.push(...(response.brands ?? []));
-          const meta = extractPaginationMeta(response, brands.length);
-          cursor = meta.has_more && meta.after_cursor ? meta.after_cursor : undefined;
-        } while (cursor);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: formatList(
-                brands,
-                formatBrand,
-                undefined,
-                'Scope the whole server to one brand by starting it with --brand-id <id>.',
-              ),
-            },
-          ],
-        };
-      },
-    },
+    // list_brands is only exposed when the server was started with several
+    // brands (or 'all'): it is the discovery source for the required per-call
+    // brand_id. In single-lock or unset mode it is absent — the brand is
+    // implicit and the schema carries no brand_id field at all.
+    ...createListBrandsTool(ctx),
     {
       name: 'search_articles',
       namespace: 'help_center',
@@ -777,7 +857,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .default(DEFAULT_PAGE_SIZE)
           .describe(PER_PAGE_DESC),
         page: z.number().int().min(1).default(1).describe(PAGE_DESC),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -828,7 +908,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       inputSchema: z.object({
         article_id: z.number().int().describe(ARTICLE_ID_DESC),
         locale: z.string().optional().describe('Locale for translated version'),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -901,7 +981,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .string()
           .optional()
           .describe('Pagination cursor from a previous response; omit for the first page.'),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -973,7 +1053,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .string()
           .optional()
           .describe('Pagination cursor from a previous response; omit for the first page.'),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -1059,7 +1139,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Include available translation locales per article (causes 1 extra API call per article)',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -1139,7 +1219,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       description:
         'List the promoted ("featured") Help Center articles — the small, editorially-curated set surfaced at the top of their sections. Returns metadata only (no body); use get_article for full content. COST: the Help Center API has no server-side promoted filter, so this scans article pages (one Zendesk API request per page, up to ARTICLE_RESOURCES_SCAN_MAX_PAGES, default 20) and filters client-side — potentially costly on a large Help Center. Each call performs a fresh, uncached scan, so avoid calling it repeatedly. On a very large Help Center some promoted articles may be omitted, and both the omission and the number of pages scanned are flagged in the output. Lists the default locale. To promote or unpromote an article, use update_article with `promoted` (requires Help Center admin / Guide admin rights).',
       inputSchema: z.object({
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -1188,7 +1268,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         'List all available translations for an article (metadata only, no body: locale, title, draft, updated_at). Use get_article with locale for full translated content.',
       inputSchema: z.object({
         article_id: z.number().int().describe(ARTICLE_ID_DESC),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -1239,7 +1319,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Create the translation as a draft (not visible to end users). Defaults to false (published).',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1308,7 +1388,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .boolean()
           .optional()
           .describe('When true, keeps this translation as a draft; when false, publishes it.'),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1355,7 +1435,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Section ID — the numeric id of the Help Center section. Obtain it from list_sections or the zendesk-hc://topology resource.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -1404,7 +1484,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Category ID — the numeric id of the Help Center category. Obtain it from list_categories or the zendesk-hc://topology resource.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -1459,7 +1539,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Restrict the audit to this category and the sections it contains (id from list_categories). Omit to sweep the whole tree, which costs two listings and covers up to 100 categories and 100 sections.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -1564,7 +1644,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Publication state: false publishes the translation, making the section visible to end users in this locale; true keeps (or puts) it back as a draft. Defaults to false when creating; omit on an existing translation to leave its state unchanged.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1639,7 +1719,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Publication state: false publishes the translation, making the category visible to end users in this locale; true keeps (or puts) it back as a draft. Defaults to false when creating; omit on an existing translation to leave its state unchanged.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1786,7 +1866,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .array(z.string())
           .optional()
           .describe('Label names for search ranking (use list_labels to see existing labels)'),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1879,7 +1959,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Sort position within the section (manual ordering only; 0 = first/top). New articles default to position 0. To move an article to the END of its section, set this to one more than the highest current position: read the highest position P from list_articles with sort_by="position", sort_order="desc", then set position = P + 1.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1946,7 +2026,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Safety guard for large reorders. When the move would rewrite more article positions than the configured threshold (REORDER_CONFIRM_THRESHOLD, default 20), the tool refuses and reports the count until you pass true here. Has no effect on small reorders.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -2077,7 +2157,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Explicit safety guard: must be set to true to archive the article. Any other value refuses the operation without calling Zendesk.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -2231,7 +2311,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       description:
         'List all article labels. Labels improve Help Center search ranking and are not visible to end users.',
       inputSchema: z.object({
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -2273,7 +2353,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       description:
         'List all user segments. User segments control article visibility (who can view). Use the ID when creating or updating articles.',
       inputSchema: z.object({
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -2330,7 +2410,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .number()
           .int()
           .describe('ID of the Help Center article whose attachments to list.'),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -2380,7 +2460,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .string()
           .optional()
           .describe('Locale of the body to outline (defaults to article source_locale)'),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -2465,7 +2545,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Output format. "html" (default) is round-trip safe. "markdown" is lossy on some HTML structures — use only for human review, not before update_article_section.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -2542,7 +2622,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'Input format. "html" (default) is the safe path. "markdown" is converted to HTML server-side but may introduce artifacts on complex content.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,
@@ -2603,7 +2683,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
             'Reference locale to diff against, e.g. "en-us". Usually the article source_locale (from get_article).',
           ),
         target_locale: z.string().describe('Target locale to compare against source'),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: true,
@@ -2702,7 +2782,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           .describe(
             'MIME type of the file, e.g. "image/png" or "application/pdf". Defaults to application/octet-stream when omitted.',
           ),
-        brand_id: BRAND_ID_FIELD,
+        ...brandIdPart,
       }),
       annotations: {
         readOnlyHint: false,

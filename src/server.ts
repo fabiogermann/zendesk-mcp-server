@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { createBrandHostResolver } from './client/brands';
+import { createBrandSubdomainResolver } from './client/brands';
 import { ZendeskApiError } from './client/zendesk-api';
 import type { Config } from './config';
 import { ARTICLE_RESOURCES_SCAN_MAX_PAGES } from './constants';
@@ -204,20 +204,25 @@ export interface ToolsetParams {
 }
 
 /**
- * Lazily resolve the deploy-locked brand's Help Center host. The resolver is
- * cached per (subdomain, brandId) in client/brands, so the topology and
- * article resources share one resolution; it only fires when a lock is set.
- * Providers await it per read (cheap after the first), since registerToolset
- * is synchronous and cannot resolve the host up front.
+ * Lazily resolve the Help Center host the topology/article resources pin to:
+ * the FIRST allowed brand when a list is set (named in the header), else the
+ * account default. The resolver is cached per (subdomain, id-or-subdomain) in
+ * client/brands, so the topology and article resources share one resolution;
+ * it only fires when a brand list is set. Providers await it per read (cheap
+ * after the first), since registerToolset is synchronous and cannot resolve
+ * the host up front.
  */
-const lockedBrandHostResolver = (
+const firstBrandHostResolver = (
   config: Config,
   getToken: () => string | Promise<string>,
 ): (() => Promise<string | undefined>) => {
-  const brandId = config.brandId;
-  if (brandId === undefined) return () => Promise.resolve(undefined);
-  const resolver = createBrandHostResolver(config.subdomain, getToken);
-  return () => resolver(brandId);
+  const first = config.brandIds?.[0];
+  if (first === undefined || first === 'all') return () => Promise.resolve(undefined);
+  const resolver = createBrandSubdomainResolver(config.subdomain, getToken);
+  return async () => {
+    const sub = await resolver(first);
+    return `${sub}.zendesk.com`;
+  };
 };
 
 /**
@@ -330,8 +335,8 @@ export const registerToolset = (
         getToken,
         config.subdomain,
         onUnauthorized,
-        config.brandId,
-        lockedBrandHostResolver(config, getToken),
+        config.brandIds,
+        firstBrandHostResolver(config, getToken),
       );
       registered.push(
         server.registerResource(
@@ -362,7 +367,7 @@ export const registerToolset = (
         getToken,
         config.subdomain,
         onUnauthorized,
-        lockedBrandHostResolver(config, getToken),
+        firstBrandHostResolver(config, getToken),
       );
       const listPromotedEnabled = promotedArticlesEnabled(config);
       const template = new ResourceTemplate(articleResourceUriTemplate(config), {
@@ -445,11 +450,11 @@ export const createMcpServer = (
   onUnauthorized?: () => void,
 ): McpServer => {
   const server = createServerShell(config, logger);
-  const resolveBrandHost = createBrandHostResolver(config.subdomain, getToken);
+  const resolveBrandSubdomain = createBrandSubdomainResolver(config.subdomain, getToken);
   const tools = createAllTools({
     subdomain: config.subdomain,
-    brandId: config.brandId,
-    resolveBrandHost,
+    brandIds: config.brandIds,
+    resolveBrandSubdomain,
     getToken,
   });
   registerToolset(server, { config, getToken, onUnauthorized, logger }, tools);

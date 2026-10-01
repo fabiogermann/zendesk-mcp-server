@@ -21,8 +21,8 @@ import { extractPaginationMeta } from '../utils/pagination';
 /** Aggregated, auto-discoverable structure of a Help Center instance. */
 export interface TopologyData {
   subdomain: string;
-  /** Brand the Help Center sections were read from; unset = account default. */
-  brandId?: number;
+  /** Allowed brands when the server was started with --brand-ids; unset = account default. */
+  brandIds?: string[];
   locales: ZendeskLocalesResponse;
   categories: ZendeskCategory[];
   sections: ZendeskSection[];
@@ -70,7 +70,7 @@ const tolerate403 = async <T>(
 export const fetchTopology = async (
   subdomain: string,
   token: string,
-  brandId?: number,
+  brandIds?: string[],
   brandHost?: string,
 ): Promise<TopologyData> => {
   const pageParams = { 'page[size]': String(MAX_PAGE_SIZE) };
@@ -114,7 +114,7 @@ export const fetchTopology = async (
     subdomain,
     // Spread rather than assign: exactOptionalPropertyTypes forbids writing an
     // explicit `undefined` into an optional field.
-    ...(brandId === undefined ? {} : { brandId }),
+    ...(brandIds === undefined ? {} : { brandIds }),
     locales,
     categories,
     sections,
@@ -184,10 +184,26 @@ const renderAdminSection = (items: string[], denied: boolean, deniedNote: string
 
 /** Render the topology as a compact Markdown document for the LLM context. */
 export const formatTopology = (data: TopologyData): string => {
+  // A configured allow-list pins the tree to its FIRST brand; the header names
+  // it and, when several brands are allowed, lists the whole set so the caller
+  // knows which brand_id values the tools accept.
+  let brandNote: string;
+  let allowedBrandsLine: string[] = [];
+  if (data.brandIds === undefined) {
+    brandNote = '';
+  } else if (data.brandIds.length === 1 && data.brandIds[0] === 'all') {
+    brandNote = ' (all brands; tree below: account default)';
+  } else if (data.brandIds.length === 1) {
+    brandNote = ` (brand ${data.brandIds[0]})`;
+  } else {
+    brandNote = ` (brand ${data.brandIds[0]})`;
+    allowedBrandsLine = ['', `**Allowed brands**: ${data.brandIds.join(', ')}`];
+  }
   const text = [
-    `# Zendesk Help Center topology — ${data.subdomain}${data.brandId === undefined ? '' : ` (brand ${data.brandId})`}`,
+    `# Zendesk Help Center topology — ${data.subdomain}${brandNote}`,
     '',
     `**Your access**: ${data.currentUser.name} (id ${data.currentUser.id}), role "${data.currentUser.role}".`,
+    ...allowedBrandsLine,
     '',
     '## Locales',
     `- Default: ${data.locales.default_locale}`,
@@ -235,7 +251,7 @@ export const createTopologyProvider = (
   getToken: () => string | Promise<string>,
   subdomain: string,
   onUnauthorized?: () => void,
-  brandId?: number,
+  brandIds?: string[],
   resolveBrandHost: () => Promise<string | undefined> = () => Promise.resolve(undefined),
 ): TopologyProvider => {
   let cached: { at: number; promise: Promise<string> } | undefined;
@@ -247,7 +263,7 @@ export const createTopologyProvider = (
 
       const promise = (async () => {
         const [token, brandHost] = await Promise.all([getToken(), resolveBrandHost()]);
-        return formatTopology(await fetchTopology(subdomain, token, brandId, brandHost));
+        return formatTopology(await fetchTopology(subdomain, token, brandIds, brandHost));
       })().catch((err: unknown) => {
         cached = undefined;
         if (onUnauthorized && err instanceof ZendeskApiError && err.status === 401) {

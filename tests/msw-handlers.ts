@@ -572,6 +572,18 @@ export const MOCK_BRAND = {
   active: true,
 };
 
+// A second brand, so multi-brand allow-list scenarios have two brands to
+// resolve between. Its Help Center host is mocked below.
+export const MOCK_BRAND_SECOND = {
+  id: 424242,
+  name: 'Second brand',
+  brand_url: 'https://brand424242.zendesk.com',
+  subdomain: 'brand424242',
+  host_mapping: null,
+  default: false,
+  active: true,
+};
+
 export const MOCK_ARTICLE_ATTACHMENT = {
   id: 20001,
   file_name: 'screenshot.png',
@@ -840,27 +852,13 @@ export const manyContentTagsHandler = http.get(`${BASE}/guide/content_tags`, () 
 );
 
 export const handlers = [
-  // Brands (Support API): the discovery source for --brand-id. Shaped per the
+  // Brands (Support API): the discovery source for --brand-ids. Shaped per the
   // Zendesk Brands API reference.
-  http.get(`${BASE}/brands`, () => HttpResponse.json({ brands: [MOCK_BRAND] })),
+  http.get(`${BASE}/brands`, () => HttpResponse.json({ brands: [MOCK_BRAND, MOCK_BRAND_SECOND] })),
 
-  // Brand id → host resolution (client/brands.ts) and the brand-scoped Help
-  // Center the host serves. Zendesk addresses brands by HOST: the brand's own
-  // host answers the standard /api/v2/help_center path. Only the integration
-  // scenario exercises these.
-  http.get(`${BASE}/brands/424242`, () =>
-    HttpResponse.json({
-      brand: {
-        id: 424242,
-        name: 'Second brand',
-        brand_url: 'https://brand424242.zendesk.com',
-        subdomain: 'brand424242',
-        host_mapping: null,
-        default: false,
-        active: true,
-      },
-    }),
-  ),
+  // The second brand's Help Center host: Zendesk addresses brands by HOST, so
+  // a brand's Guide answers on <brand.subdomain>.zendesk.com under the standard
+  // /api/v2/help_center path.
   http.get('https://brand424242.zendesk.com/api/v2/help_center/categories', () =>
     HttpResponse.json({ categories: [MOCK_CATEGORY] }),
   ),

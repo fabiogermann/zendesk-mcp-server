@@ -31,13 +31,19 @@ export const ConfigSchema = z.object({
   oauthClientId: z.string().min(1),
   /**
    * Restrict every Help Center operation (tools, topology resource, article
-   * resources) to one brand on a multi-brand account, addressed by the brand's
-   * own host (resolved via GET /api/v2/brands/{id}). Unset targets the account
-   * default brand — the only case a single-brand account ever sees. Brand ids
-   * come from the `list_brands` tool or the Brands API. Support-side
-   * namespaces (tickets, users, search) are account-wide and unaffected.
+   * resources) to an allow-list of brands on a multi-brand account. Entries are
+   * brand ids or brand subdomains (display names can contain commas and change;
+   * a subdomain is unique and is what the brand host is built from), or the
+   * special value 'all' for every brand of the account. One entry hard-locks
+   * the server to that brand; several (or 'all') expose `list_brands` and make
+   * the per-call `brand_id` parameter REQUIRED on every brand-scoped Help
+   * Center tool — no silent default. Unset targets the account default brand,
+   * byte-identical to a single-brand account. Resolution is lazy, on first use:
+   * startup validates the format only, an unknown id/subdomain fails on the
+   * first call that resolves it. Support-side namespaces (tickets, users,
+   * search) are account-wide and unaffected.
    */
-  brandId: z.number().int().positive().optional(),
+  brandIds: z.array(z.string().min(1)).min(1).optional(),
   logLevel: LogLevel,
   mode: ToolMode,
   readOnly: z.boolean(),
@@ -165,7 +171,7 @@ interface CliResult {
   // unconditionally: `exactOptionalPropertyTypes` would otherwise force a guard
   // that reads as behaviour but only ever satisfies the type checker.
   subdomain?: string | undefined;
-  brandId?: number;
+  brandIds?: string;
   mode?: string;
   readOnly?: boolean;
   namespaces?: string[];
@@ -220,12 +226,37 @@ const portEnv = (name: string): number | undefined => {
   return env.value === undefined ? undefined : parsePort(env.value, env.name);
 };
 
+/**
+ * Split a raw `--brand-ids` / `ZENDESK_BRAND_IDS` value into its entries.
+ * Comma-separated, entries trimmed; an empty entry (from `a,,b`, a leading/
+ * trailing comma, or a whitespace-only value) is a misconfiguration, not an
+ * ignored blank: it fails at startup naming the knob. Format validation only —
+ * whether an id/subdomain exists is decided lazily, on first use (no token is
+ * available at startup on either transport).
+ */
+const parseBrandIds = (raw: string | undefined): string[] | undefined => {
+  if (raw === undefined) return undefined;
+  const entries = raw.split(',').map((entry) => entry.trim());
+  if (entries.some((entry) => entry.length === 0)) {
+    throw new Error(
+      'Invalid --brand-ids / ZENDESK_BRAND_IDS value: empty entry. ' +
+        'Expected a comma-separated list of brand ids or subdomains, or "all".',
+    );
+  }
+  if (entries.length > 1 && entries.includes('all')) {
+    throw new Error(
+      'Invalid --brand-ids / ZENDESK_BRAND_IDS value: "all" cannot be combined with brand ids or subdomains.',
+    );
+  }
+  return entries;
+};
+
 // The whole CLI surface as one declarative table: `parseArgs` derives the
 // unknown-flag, missing-value and stray-value rejections from it, so those
 // guarantees cannot drift per flag. Adding a flag is one entry here.
 const CLI_OPTIONS = {
   mode: { type: 'string' },
-  'brand-id': { type: 'string' },
+  'brand-ids': { type: 'string' },
   namespace: { type: 'string', multiple: true },
   tool: { type: 'string', multiple: true },
   'log-level': { type: 'string' },
@@ -331,8 +362,7 @@ const parseCliArgs = (args: string[]): CliResult => {
   if (values['callback-port'] !== undefined) {
     result.callbackPort = parsePort(values['callback-port'], '--callback-port');
   }
-  if (values['brand-id'] !== undefined)
-    result.brandId = parsePort(values['brand-id'], '--brand-id');
+  if (values['brand-ids'] !== undefined) result.brandIds = values['brand-ids'];
 
   return result;
 };
@@ -386,7 +416,7 @@ export const loadConfig = (argv: string[] = process.argv.slice(2)): Config => {
   const namespaces = cli.namespaces ?? (cli.tools?.length ? [...Namespace.options] : undefined);
 
   const callbackPort = cli.callbackPort ?? portEnv('OAUTH_CALLBACK_PORT');
-  const brandId = cli.brandId ?? portEnv('ZENDESK_BRAND_ID');
+  const brandIds = cli.brandIds ?? requireNonEmptyEnv('ZENDESK_BRAND_IDS');
 
   // Unset leaves this undefined so the schema default (`zendesk-hc`) applies;
   // empty is rejected by requireNonEmptyEnv. Format is schema-validated.
@@ -395,7 +425,7 @@ export const loadConfig = (argv: string[] = process.argv.slice(2)): Config => {
   return ConfigSchema.parse({
     subdomain,
     oauthClientId,
-    brandId,
+    brandIds: parseBrandIds(brandIds),
     logLevel: cli.logLevel ?? requireNonEmptyEnv('LOG_LEVEL') ?? 'info',
     mode,
     readOnly: cli.readOnly ?? false,

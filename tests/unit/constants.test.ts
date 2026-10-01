@@ -19,12 +19,6 @@ describe('getHelpCenterBaseUrl', () => {
       'https://brand1.zendesk.com/api/v2/help_center',
     );
   });
-
-  it('prefers a brand host mapping (custom domain)', () => {
-    expect(getHelpCenterBaseUrl('mycompany', 'help.example.com')).toBe(
-      'https://help.example.com/api/v2/help_center',
-    );
-  });
 });
 
 describe('getOAuthUrls', () => {

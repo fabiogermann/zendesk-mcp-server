@@ -37,20 +37,22 @@ export interface ToolDefinition {
 export interface ToolContext {
   subdomain: string;
   /**
-   * Deploy-time brand lock (multi-brand accounts): Help Center operations are
-   * restricted to this brand, and a per-call `brand_id` naming any other brand
-   * is rejected. Unset = account default brand, per-call selection allowed.
-   * Only the help_center namespace reads it; Support-side tools are account-wide.
-   * `| undefined` so callers can spread config.brandId straight in under
-   * exactOptionalPropertyTypes.
+   * Deploy-time brand allow-list (multi-brand accounts): Help Center operations
+   * are restricted to these brands. One entry hard-locks the server to that
+   * brand (no per-call override accepted); several (or the single entry 'all')
+   * expose `list_brands` and make the per-call `brand_id` REQUIRED on every
+   * brand-scoped Help Center tool. Unset = account default brand, no `brand_id`
+   * field on any schema. Only the help_center namespace reads it; Support-side
+   * tools are account-wide. `| undefined` so callers can spread config.brandIds
+   * straight in under exactOptionalPropertyTypes.
    */
-  brandId?: number | undefined;
+  brandIds?: string[] | undefined;
   /**
-   * Resolves a brand id to the host its Help Center is served on
-   * (`host_mapping` ?? `<brand.subdomain>.zendesk.com`), cached. Zendesk
-   * addresses brands by host, so every brand-scoped Help Center call goes
-   * through here first. Only ever invoked when a brand is actually selected.
+   * Resolves a brand id-or-subdomain to the brand's subdomain, cached. Zendesk
+   * addresses brands by host (`<brand.subdomain>.zendesk.com`), so every
+   * brand-scoped Help Center call goes through here first. Only ever invoked
+   * when a brand is actually selected.
    */
-  resolveBrandHost: (brandId: number) => Promise<string>;
+  resolveBrandSubdomain: (idOrSubdomain: string) => Promise<string>;
   getToken: () => string | Promise<string>;
 }

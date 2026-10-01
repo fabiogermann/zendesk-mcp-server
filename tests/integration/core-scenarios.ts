@@ -244,21 +244,45 @@ export const registerCoreScenarios = (harness: IntegrationHarness): void => {
         expect(textOf(result)).toContain('SLA contractuels fruggr - Bugs/Incidents');
       });
 
-      it('reaches list_brands over the wire, and scopes Help Center tools to --brand-id', async () => {
+      it('exposes list_brands and requires brand_id in multi-brand mode', async () => {
+        // Unset: no list_brands, no brand_id on the schemas.
         connected = await harness.connect(makeConfig({ mode: 'all' }));
-        const brands = await connected.client.callTool({ name: 'list_brands', arguments: {} });
-        expect(brands.isError).toBeFalsy();
-        expect(textOf(brands)).toContain('Main brand');
+        let names = toolNames((await connected.client.listTools()).tools);
+        expect(names).not.toContain('list_brands');
         await connected.close();
 
-        // Brand-scoped: list_categories resolves through the brand Help Center.
-        connected = await harness.connect(makeConfig({ mode: 'all', brandId: 424242 }));
-        const scoped = await connected.client.callTool({
+        // Multi: list_brands appears, and brand-scoped tools require brand_id.
+        connected = await harness.connect(
+          makeConfig({ mode: 'all', brandIds: ['424242', '360001234567'] }),
+        );
+        names = toolNames((await connected.client.listTools()).tools);
+        expect(names).toContain('list_brands');
+
+        const brands = await connected.client.callTool({ name: 'list_brands', arguments: {} });
+        expect(brands.isError).toBeFalsy();
+        expect(textOf(brands)).toContain('Second brand');
+
+        // brand_id required: a call without it fails.
+        const missing = await connected.client.callTool({
           name: 'list_categories',
           arguments: {},
         });
+        expect(missing.isError).toBe(true);
+
+        // With an allowed brand_id the call resolves through the brand host.
+        const scoped = await connected.client.callTool({
+          name: 'list_categories',
+          arguments: { brand_id: 424242 },
+        });
         expect(scoped.isError).toBeFalsy();
         expect(textOf(scoped)).toContain('General');
+
+        // A brand outside the allow-list is rejected.
+        const rejected = await connected.client.callTool({
+          name: 'list_categories',
+          arguments: { brand_id: 999999 },
+        });
+        expect(rejected.isError).toBe(true);
       });
 
       it('exposes one proxy per namespace in "namespace" mode', async () => {

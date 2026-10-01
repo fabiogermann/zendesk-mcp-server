@@ -37,8 +37,21 @@ describe('buildInstructions', () => {
   });
 
   it('names the brand restriction when one is configured', () => {
-    const text = buildInstructions(makeConfig({ subdomain: 'acme', brandId: 424242 }));
+    const text = buildInstructions(makeConfig({ subdomain: 'acme', brandIds: ['424242'] }));
     expect(text).toContain('424242');
+  });
+
+  it('names all brands when the allow-list is "all"', () => {
+    const text = buildInstructions(makeConfig({ subdomain: 'acme', brandIds: ['all'] }));
+    expect(text).toContain('all brands');
+  });
+
+  it('names the allowed brands when several are configured', () => {
+    const text = buildInstructions(
+      makeConfig({ subdomain: 'acme', brandIds: ['424242', '777777'] }),
+    );
+    expect(text).toContain('424242');
+    expect(text).toContain('777777');
   });
 
   it('mentions no brand when none is configured', () => {

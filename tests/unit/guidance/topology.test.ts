@@ -41,14 +41,14 @@ describe('fetchTopology', () => {
       }),
     );
 
-    const data = await fetchTopology(SUBDOMAIN, TOKEN, 424242, 'brand424242.zendesk.com');
+    const data = await fetchTopology(SUBDOMAIN, TOKEN, ['424242'], 'brand424242.zendesk.com');
 
     // Brand-scoped: the tree (locales, categories, sections) is read from the
     // brand host. User segments, permission groups and the current user are
     // account-wide and deliberately NOT brand-scoped.
     expect(seen).toHaveLength(3);
     expect(seen.every((url) => url.startsWith('https://brand424242.zendesk.com/'))).toBe(true);
-    expect(data.brandId).toBe(424242);
+    expect(data.brandIds).toEqual(['424242']);
     expect(data.categories.map((c) => c.id)).toEqual([800]);
     expect(data.sections.map((s) => s.id)).toEqual([600]);
     expect(data.userSegments.map((s) => s.id)).toEqual([15001]);
@@ -188,8 +188,19 @@ describe('formatTopology', () => {
   });
 
   it('names the brand in the header when the topology is brand-scoped', () => {
-    const text = formatTopology({ ...baseData(), brandId: 424242 });
+    const text = formatTopology({ ...baseData(), brandIds: ['424242'] });
     expect(text).toContain('brand 424242');
+  });
+
+  it('pins the tree to the FIRST allowed brand and lists the whole allow-list', () => {
+    const text = formatTopology({ ...baseData(), brandIds: ['424242', '777777'] });
+    expect(text).toContain('brand 424242');
+    expect(text).toContain('**Allowed brands**: 424242, 777777');
+  });
+
+  it('mentions all brands when the allow-list is "all"', () => {
+    const text = formatTopology({ ...baseData(), brandIds: ['all'] });
+    expect(text).toContain('all brands');
   });
 
   it('mentions no brand when unscoped (account default brand)', () => {
