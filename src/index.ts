@@ -60,9 +60,10 @@ const main = async (): Promise<void> => {
   if (config.printTools) {
     const tools = createAllTools({
       subdomain: config.subdomain,
+      brandIds: config.brandIds,
       // --print-tools never invokes a handler, so the resolver is never called;
       // a stub satisfies the context without a credential or a network call.
-      resolveBrandHost: () => Promise.resolve(''),
+      resolveBrandSubdomain: () => Promise.resolve(''),
       getToken: () => '',
     });
     console.log(renderToolSurface(config, tools));

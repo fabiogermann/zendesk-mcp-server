@@ -20,7 +20,8 @@ import { mswServer } from '../../setup';
 
 const ctx: ToolContext = {
   subdomain: 'testsubdomain',
-  resolveBrandHost: () => Promise.resolve('brand424242.zendesk.com'),
+  resolveBrandSubdomain: (idOrSubdomain: string) =>
+    Promise.resolve(/^\d+$/.test(idOrSubdomain) ? `brand${idOrSubdomain}` : idOrSubdomain),
   getToken: () => 'test-token',
 };
 const HC_BASE = 'https://testsubdomain.zendesk.com/api/v2/help_center';
@@ -33,13 +34,95 @@ const findTool = (name: string) => {
 };
 
 describe('help center tools', () => {
-  it('creates 30 tools', () => {
-    expect(createHelpCenterTools(ctx)).toHaveLength(30);
+  it('creates 29 tools when no --brand-ids is set (list_brands stays hidden)', () => {
+    expect(createHelpCenterTools(ctx)).toHaveLength(29);
+  });
+
+  it('creates 30 tools in multi mode (list_brands exposed)', () => {
+    const multiCtx: ToolContext = { ...ctx, brandIds: ['424242', '777777'] };
+    expect(createHelpCenterTools(multiCtx)).toHaveLength(30);
+  });
+
+  it('creates 30 tools in all mode (list_brands exposed)', () => {
+    const allCtx: ToolContext = { ...ctx, brandIds: ['all'] };
+    expect(createHelpCenterTools(allCtx)).toHaveLength(30);
+  });
+
+  it('creates 29 tools in single-lock mode (list_brands stays hidden)', () => {
+    const singleCtx: ToolContext = { ...ctx, brandIds: ['424242'] };
+    expect(createHelpCenterTools(singleCtx)).toHaveLength(29);
+  });
+
+  describe('brand_id field gating per mode', () => {
+    // The account-wide Guide tools (permission groups, content tags) have no
+    // brand dimension and never take brand_id.
+    const accountWide = new Set([
+      'list_permission_groups',
+      'list_content_tags',
+      'create_content_tag',
+    ]);
+
+    it('no brand-scoped tool has a brand_id field when --brand-ids is unset', () => {
+      const lacking = createHelpCenterTools(ctx)
+        .filter((t) => !accountWide.has(t.name))
+        .filter((t) => 'brand_id' in t.inputSchema.shape)
+        .map((t) => t.name);
+      expect(lacking).toEqual([]);
+    });
+
+    it('no brand-scoped tool has a brand_id field in single-lock mode', () => {
+      const singleCtx: ToolContext = { ...ctx, brandIds: ['424242'] };
+      const lacking = createHelpCenterTools(singleCtx)
+        .filter((t) => !accountWide.has(t.name))
+        .filter((t) => 'brand_id' in t.inputSchema.shape)
+        .map((t) => t.name);
+      expect(lacking).toEqual([]);
+    });
+
+    it('every brand-scoped tool has a REQUIRED brand_id field in multi mode', () => {
+      const multiCtx: ToolContext = { ...ctx, brandIds: ['424242', '777777'] };
+      const tools = createHelpCenterTools(multiCtx).filter(
+        (t) => !accountWide.has(t.name) && t.name !== 'list_brands',
+      );
+      expect(tools.length).toBeGreaterThan(0);
+      for (const tool of tools) {
+        const field = tool.inputSchema.shape['brand_id'];
+        expect(field, `${tool.name} missing brand_id`).toBeDefined();
+        // Required, not optional: parsing without it must fail.
+        expect(tool.inputSchema.safeParse({}).success, `${tool.name} brand_id optional`).toBe(
+          false,
+        );
+      }
+    });
+
+    it('every brand-scoped tool has a REQUIRED brand_id field in all mode', () => {
+      const allCtx: ToolContext = { ...ctx, brandIds: ['all'] };
+      const tool = createHelpCenterTools(allCtx).find((t) => t.name === 'list_categories');
+      if (!tool) throw new Error('list_categories not found');
+      expect(tool.inputSchema.shape['brand_id']).toBeDefined();
+      expect(tool.inputSchema.safeParse({}).success).toBe(false);
+      expect(tool.inputSchema.safeParse({ brand_id: 424242 }).success).toBe(true);
+    });
   });
 
   describe('list_brands', () => {
+    const multiCtx: ToolContext = { ...ctx, brandIds: ['360001234567', '424242'] };
+
+    it('is absent when --brand-ids is unset', () => {
+      expect(createHelpCenterTools(ctx).find((t) => t.name === 'list_brands')).toBeUndefined();
+    });
+
+    it('is absent in single-lock mode', () => {
+      const singleCtx: ToolContext = { ...ctx, brandIds: ['424242'] };
+      expect(
+        createHelpCenterTools(singleCtx).find((t) => t.name === 'list_brands'),
+      ).toBeUndefined();
+    });
+
     it('lists the account brands from the Support API (not Help Center)', async () => {
-      const tool = findTool('list_brands');
+      const allCtx: ToolContext = { ...ctx, brandIds: ['all'] };
+      const tool = createHelpCenterTools(allCtx).find((t) => t.name === 'list_brands');
+      if (!tool) throw new Error('list_brands not found');
       const result = await tool.handler({});
       const text = result.content[0]?.text ?? '';
       expect(text).toContain('Main brand');
@@ -47,7 +130,9 @@ describe('help center tools', () => {
     });
 
     it('is read-only', () => {
-      expect(findTool('list_brands').readOnly).toBe(true);
+      const tool = createHelpCenterTools(multiCtx).find((t) => t.name === 'list_brands');
+      if (!tool) throw new Error('list_brands not found');
+      expect(tool.readOnly).toBe(true);
     });
 
     it('follows cursor pagination so later brands are not dropped', async () => {
@@ -67,18 +152,42 @@ describe('help center tools', () => {
           });
         }),
       );
-      const tool = findTool('list_brands');
+      const allCtx: ToolContext = { ...ctx, brandIds: ['all'] };
+      const tool = createHelpCenterTools(allCtx).find((t) => t.name === 'list_brands');
+      if (!tool) throw new Error('list_brands not found');
       const result = await tool.handler({});
       const text = result.content[0]?.text ?? '';
       expect(text).toContain('First brand');
       expect(text).toContain('Second brand');
     });
+
+    it('filters the listing to the allowed brands in multi mode', async () => {
+      const tool = createHelpCenterTools(multiCtx).find((t) => t.name === 'list_brands');
+      if (!tool) throw new Error('list_brands not found');
+      const result = await tool.handler({});
+      const text = result.content[0]?.text ?? '';
+      // The /brands mock returns MOCK_BRAND (360001234567) and Second brand
+      // (424242); the allow-list keeps both.
+      expect(text).toContain('Main brand');
+      expect(text).toContain('424242');
+    });
+
+    it('drops brands outside the allow-list in multi mode', async () => {
+      const narrowCtx: ToolContext = { ...ctx, brandIds: ['424242', '999999'] };
+      const tool = createHelpCenterTools(narrowCtx).find((t) => t.name === 'list_brands');
+      if (!tool) throw new Error('list_brands not found');
+      const result = await tool.handler({});
+      const text = result.content[0]?.text ?? '';
+      expect(text).toContain('424242');
+      expect(text).not.toContain('Main brand');
+    });
   });
 
-  describe('brand scoping (--brand-id)', () => {
-    const brandedCtx: ToolContext = { ...ctx, brandId: 424242 };
+  describe('brand scoping (--brand-ids)', () => {
+    const singleCtx: ToolContext = { ...ctx, brandIds: ['424242'] };
+    const multiCtx: ToolContext = { ...ctx, brandIds: ['424242', '777777'] };
 
-    it('scopes Help Center reads to /brands/{id}', async () => {
+    it('scopes Help Center reads to the locked brand host in single mode', async () => {
       let seenUrl = '';
       mswServer.use(
         http.get('https://brand424242.zendesk.com/api/v2/help_center/categories', ({ request }) => {
@@ -86,14 +195,14 @@ describe('help center tools', () => {
           return HttpResponse.json({ categories: [MOCK_CATEGORY] });
         }),
       );
-      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_categories');
+      const tool = createHelpCenterTools(singleCtx).find((t) => t.name === 'list_categories');
       if (!tool) throw new Error('list_categories not found');
       const result = await tool.handler({});
       expect(seenUrl).toContain('/help_center/categories');
       expect(result.content[0]?.text).toContain('General');
     });
 
-    it('scopes Help Center writes to /brands/{id}', async () => {
+    it('scopes Help Center writes to the locked brand host in single mode', async () => {
       let seenUrl = '';
       mswServer.use(
         http.put(
@@ -104,36 +213,13 @@ describe('help center tools', () => {
           },
         ),
       );
-      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'update_article');
+      const tool = createHelpCenterTools(singleCtx).find((t) => t.name === 'update_article');
       if (!tool) throw new Error('update_article not found');
       await tool.handler({ article_id: 9001, promoted: true });
       expect(seenUrl).toContain('/help_center/articles/9001');
     });
 
-    it('leaves list_brands itself unscoped (brands live on the Support API)', async () => {
-      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_brands');
-      if (!tool) throw new Error('list_brands not found');
-      const result = await tool.handler({});
-      expect(result.content[0]?.text).toContain('Main brand');
-    });
-
-    it('exposes an optional brand_id on every brand-scoped Help Center tool', () => {
-      // The account-wide Guide tools (brands, permission groups, content tags)
-      // have no brand dimension and stay out.
-      const exempt = new Set([
-        'list_brands',
-        'list_permission_groups',
-        'list_content_tags',
-        'create_content_tag',
-      ]);
-      const missing = createHelpCenterTools(ctx)
-        .filter((t) => !exempt.has(t.name))
-        .filter((t) => !('brand_id' in t.inputSchema.shape))
-        .map((t) => t.name);
-      expect(missing).toEqual([]);
-    });
-
-    it('honours a per-call brand_id when no lock is configured', async () => {
+    it('scopes a per-call brand_id to that brand host in multi mode', async () => {
       let seenUrl = '';
       mswServer.use(
         http.get('https://brand777777.zendesk.com/api/v2/help_center/categories', ({ request }) => {
@@ -141,35 +227,38 @@ describe('help center tools', () => {
           return HttpResponse.json({ categories: [MOCK_CATEGORY] });
         }),
       );
-      const unlockedCtx: ToolContext = {
-        ...ctx,
-        resolveBrandHost: () => Promise.resolve('brand777777.zendesk.com'),
-      };
-      const tool = createHelpCenterTools(unlockedCtx).find((t) => t.name === 'list_categories');
+      const tool = createHelpCenterTools(multiCtx).find((t) => t.name === 'list_categories');
       if (!tool) throw new Error('list_categories not found');
       const result = await tool.handler({ brand_id: 777777 });
       expect(seenUrl).toContain('/help_center/categories');
       expect(result.content[0]?.text).toContain('General');
     });
 
-    it('rejects a per-call brand_id that disagrees with the deploy lock', async () => {
-      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_categories');
+    it('rejects a missing brand_id in multi mode', async () => {
+      const tool = createHelpCenterTools(multiCtx).find((t) => t.name === 'list_categories');
       if (!tool) throw new Error('list_categories not found');
-      await expect(tool.handler({ brand_id: 999999 })).rejects.toThrow('--brand-id');
+      await expect(tool.handler({})).rejects.toThrow(/brand_id is required/);
     });
 
-    it('accepts a per-call brand_id equal to the deploy lock', async () => {
-      let seenUrl = '';
-      mswServer.use(
-        http.get('https://brand424242.zendesk.com/api/v2/help_center/categories', ({ request }) => {
-          seenUrl = request.url;
-          return HttpResponse.json({ categories: [MOCK_CATEGORY] });
-        }),
-      );
-      const tool = createHelpCenterTools(brandedCtx).find((t) => t.name === 'list_categories');
+    it('rejects a per-call brand_id outside the allow-list in multi mode', async () => {
+      const tool = createHelpCenterTools(multiCtx).find((t) => t.name === 'list_categories');
       if (!tool) throw new Error('list_categories not found');
-      await tool.handler({ brand_id: 424242 });
-      expect(seenUrl).toContain('/help_center/categories');
+      await expect(tool.handler({ brand_id: 999999 })).rejects.toThrow(/not allowed/);
+    });
+
+    it('rejects a per-call brand_id in single-lock mode (no field, strict parse)', async () => {
+      const tool = createHelpCenterTools(singleCtx).find((t) => t.name === 'list_categories');
+      if (!tool) throw new Error('list_categories not found');
+      // brand_id is absent from the schema, so a hand-crafted call that passes
+      // it anyway is rejected by the resolver, before any request.
+      await expect(tool.handler({ brand_id: 424242 })).rejects.toThrow(/brand_id/);
+      await expect(tool.handler({ brand_id: 999999 })).rejects.toThrow(/brand_id/);
+    });
+
+    it('rejects a per-call brand_id when --brand-ids is unset', async () => {
+      const tool = createHelpCenterTools(ctx).find((t) => t.name === 'list_categories');
+      if (!tool) throw new Error('list_categories not found');
+      await expect(tool.handler({ brand_id: 424242 })).rejects.toThrow(/brand_id/);
     });
   });
 

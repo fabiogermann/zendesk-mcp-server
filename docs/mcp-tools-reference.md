@@ -38,15 +38,19 @@ out every `write` tool before the proxies are built.
 <details>
 <summary><strong>Help Center</strong></summary>
 
-Every brand-scoped Help Center tool (all of them except `list_brands`,
-`list_permission_groups`, `list_content_tags` and `create_content_tag`) takes an
-optional `brand_id` parameter: without `--brand-id` it picks the brand for that
-one call; with `--brand-id` (a hard lock) only the locked value is accepted.
-Ids come from `list_brands`.
+When the server is started with `--brand-ids`, every brand-scoped Help Center
+tool (all of them except `list_brands`, `list_permission_groups`,
+`list_content_tags` and `create_content_tag`) takes a **required** `brand_id`
+parameter naming the brand for that call — restricted to the allow-list (or any
+brand with `--brand-ids all`). There is no silent default: a call without
+`brand_id` fails. Ids come from `list_brands`, which is only exposed in this
+mode. With a single `--brand-ids` entry the server is locked to that brand and
+no schema carries `brand_id`; with the flag unset the account default brand is
+used and `brand_id` does not exist.
 
 | Tool | Description | Mode |
 |------|-------------|------|
-| `list_brands` | List the account's brands — the discovery source for `--brand-id` / per-call `brand_id` on multi-brand accounts | read |
+| `list_brands` | List the account's brands — the discovery source for the per-call `brand_id` on multi-brand accounts (only exposed with `--brand-ids` naming several brands or `all`) | read |
 | `search_articles` | Full-text search across Help Center articles | read |
 | `get_article` | Retrieve article by ID with full HTML body | read |
 | `get_article_outline` | Compact outline of an article (sections + available translations) | read |

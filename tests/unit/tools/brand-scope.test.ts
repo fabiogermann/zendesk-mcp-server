@@ -1,24 +1,74 @@
 import { describe, expect, it } from 'vitest';
-import { resolveBrandId } from '../../../src/tools/help-center';
+import { resolveBrand } from '../../../src/tools/help-center';
 
-describe('resolveBrandId', () => {
-  it('defaults to the account default brand when neither is set', () => {
-    expect(resolveBrandId(undefined, undefined)).toBeUndefined();
+// A trivial resolver that maps id-or-subdomain to a deterministic subdomain:
+// numeric ids become `brand<id>`, anything else passes through.
+const stubResolver = (idOrSubdomain: string): Promise<string> =>
+  Promise.resolve(/^\d+$/.test(idOrSubdomain) ? `brand${idOrSubdomain}` : idOrSubdomain);
+
+describe('resolveBrand', () => {
+  describe('unset (no --brand-ids)', () => {
+    it('returns undefined when no per-call brand is given', async () => {
+      await expect(resolveBrand(undefined, undefined, stubResolver)).resolves.toBeUndefined();
+    });
+
+    it('rejects a per-call brand_id', async () => {
+      await expect(resolveBrand(111, undefined, stubResolver)).rejects.toThrow(
+        /without --brand-ids/,
+      );
+    });
   });
 
-  it('uses the per-call brand when no lock is configured', () => {
-    expect(resolveBrandId(111, undefined)).toBe(111);
+  describe('single entry (hard lock)', () => {
+    it('returns the configured brand when no per-call brand is given', async () => {
+      await expect(resolveBrand(undefined, ['222'], stubResolver)).resolves.toBe('brand222');
+    });
+
+    it('accepts a subdomain as the lock entry', async () => {
+      await expect(resolveBrand(undefined, ['support'], stubResolver)).resolves.toBe('support');
+    });
+
+    it('rejects any per-call brand_id, even one equal to the lock', async () => {
+      // Hard lock, no escape: the schema has no brand_id field, so a caller
+      // that passes one anyway is rejected rather than silently honoured.
+      await expect(resolveBrand(222, ['222'], stubResolver)).rejects.toThrow('--brand-ids');
+    });
+
+    it('rejects a per-call brand_id that disagrees with the lock', async () => {
+      await expect(resolveBrand(111, ['222'], stubResolver)).rejects.toThrow('--brand-ids');
+    });
   });
 
-  it('uses the deploy lock when no per-call brand is given', () => {
-    expect(resolveBrandId(undefined, 222)).toBe(222);
+  describe('multi entry (allow-list)', () => {
+    it('requires a per-call brand_id', async () => {
+      await expect(resolveBrand(undefined, ['111', '222'], stubResolver)).rejects.toThrow(
+        /brand_id is required/,
+      );
+    });
+
+    it('accepts a per-call brand_id in the list', async () => {
+      await expect(resolveBrand(111, ['111', '222'], stubResolver)).resolves.toBe('brand111');
+    });
+
+    it('accepts a per-call brand_id matching a subdomain entry by resolution', async () => {
+      // Entry 'brand333' resolves to itself; per-call 333 resolves to 'brand333'.
+      await expect(resolveBrand(333, ['brand333', '111'], stubResolver)).resolves.toBe('brand333');
+    });
+
+    it('rejects a per-call brand_id not in the list', async () => {
+      await expect(resolveBrand(999, ['111', '222'], stubResolver)).rejects.toThrow(/not allowed/);
+    });
   });
 
-  it('lets a per-call brand equal to the lock pass through', () => {
-    expect(resolveBrandId(222, 222)).toBe(222);
-  });
+  describe("'all'", () => {
+    it('requires a per-call brand_id', async () => {
+      await expect(resolveBrand(undefined, ['all'], stubResolver)).rejects.toThrow(
+        /brand_id is required/,
+      );
+    });
 
-  it('rejects a per-call brand that disagrees with the deploy lock', () => {
-    expect(() => resolveBrandId(111, 222)).toThrow('--brand-id');
+    it('accepts any per-call brand_id', async () => {
+      await expect(resolveBrand(999, ['all'], stubResolver)).resolves.toBe('brand999');
+    });
   });
 });

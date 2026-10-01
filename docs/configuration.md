@@ -19,11 +19,13 @@ zendesk-mcp-server <subdomain> [options]
 
 Options:
   --mode <mode>           single | namespace (default) | all
-  --brand-id <id>         Restrict Help Center operations to one brand
-                          (multi-brand accounts; default: account default
-                          brand). Hard lock: a per-call brand_id equal to
-                          it passes, any other is rejected. Also
-                          ZENDESK_BRAND_ID.
+  --brand-ids <list>      Restrict Help Center operations to an allow-list of
+                          brands (multi-brand accounts; default: account
+                          default brand). Comma-separated brand ids or
+                          subdomains, or "all". One entry: hard lock, no
+                          per-call override. Several or "all": list_brands is
+                          exposed and every brand-scoped Help Center tool
+                          requires a per-call brand_id. Also ZENDESK_BRAND_IDS.
   --namespace <ns>        Filter by namespace (repeatable): tickets, help_center,
                           users, requests. Defaults to tickets + help_center +
                           users; `requests` (the end-user surface) is opt-in and
@@ -248,25 +250,37 @@ OAuth client identifier. The same public PKCE client serves both transports: in
 HTTP mode, add `<public-url>/oauth/callback` to its redirect URLs
 ([setup](http-deployment.md#zendesk-oauth-setup)).
 
-### `ZENDESK_BRAND_ID`
+### `ZENDESK_BRAND_IDS`
 **Required:** no · **Default:** none (account default brand)
 
 Restrict every Help Center operation — tools, the topology resource, the
-article resources — to one brand on a multi-brand account. Zendesk addresses
-brands by host: the server resolves the brand id via `GET /api/v2/brands/{id}`
-(cached) and calls the brand's own host (`host_mapping` when set, else
-`<brand.subdomain>.zendesk.com`) under the standard `/api/v2/help_center` path.
-Also `--brand-id`. Brand ids come from the `list_brands` tool or the Zendesk
+article resources — to an allow-list of brands on a multi-brand account.
+Entries are brand ids or brand subdomains (display names can contain commas
+and change; a subdomain is unique and is what the brand host is built from),
+comma-separated, or the special value `all` for every brand of the account.
+Also `--brand-ids`. Brand ids come from the `list_brands` tool or the Zendesk
 Brands API. Tickets, users and search are account-wide and unaffected.
 
-The lock is a **hard lock**: every brand-scoped Help Center tool also takes an
-optional `brand_id` parameter, and with the lock set only that same value is
-accepted — any other is rejected with an error naming `--brand-id`. Without the
-lock, `brand_id` overrides the account default brand for that call, so one
-server can address several brands on the same connection. With neither, the
-account default brand is used. The account-wide Guide tools (`list_brands`,
-`list_permission_groups`, `list_content_tags`, `create_content_tag`) take no
-`brand_id` — they have no brand dimension.
+Zendesk addresses brands by host: the server resolves each entry to its brand
+(lazily, on first use — startup validates the format only) and calls
+`<brand.subdomain>.zendesk.com` under the standard `/api/v2/help_center` path.
+
+The value shapes the tool surface:
+
+- **Unset** — the account default brand is used and no schema carries a
+  `brand_id` field (byte-identical to a single-brand account).
+- **One entry** (e.g. `--brand-ids 360001234567` or `--brand-ids support`) —
+  a **hard lock**: every Help Center operation is pinned to that brand, no
+  schema carries `brand_id`, and `list_brands` is not exposed.
+- **Several entries** — `list_brands` is exposed (limited to the allowed
+  brands) and every brand-scoped Help Center tool takes a **required**
+  `brand_id` restricted to the allow-list. There is no silent default: a call
+  without `brand_id` fails.
+- **`all`** — `list_brands` is exposed with every brand, and `brand_id` is
+  likewise required, accepting any brand.
+
+The account-wide Guide tools (`list_permission_groups`, `list_content_tags`,
+`create_content_tag`) take no `brand_id` — they have no brand dimension.
 
 ### `OAUTH_CALLBACK_PORT`
 **Required:** no · **Default:** `27439`

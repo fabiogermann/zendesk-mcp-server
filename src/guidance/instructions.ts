@@ -78,10 +78,16 @@ export const promotedArticlesEnabled = (config: Config): boolean =>
  */
 export const buildInstructions = (config: Config): string | undefined => {
   if (!helpCenterContextEnabled(config)) return undefined;
-  const scope =
-    config.brandId === undefined
-      ? `the Zendesk Help Center of "${config.subdomain}"`
-      : `brand ${config.brandId} of the Zendesk Help Center of "${config.subdomain}"`;
+  let scope: string;
+  if (config.brandIds === undefined) {
+    scope = `the Zendesk Help Center of "${config.subdomain}"`;
+  } else if (config.brandIds.length === 1 && config.brandIds[0] === 'all') {
+    scope = `all brands of the Zendesk Help Center of "${config.subdomain}"`;
+  } else if (config.brandIds.length === 1) {
+    scope = `brand ${config.brandIds[0]} of the Zendesk Help Center of "${config.subdomain}"`;
+  } else {
+    scope = `brands ${config.brandIds.join(', ')} of the Zendesk Help Center of "${config.subdomain}"`;
+  }
   return [
     `This MCP server is connected to ${scope}.`,
     '',

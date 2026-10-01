@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { createBrandHostResolver } from '../client/brands';
+import { createBrandSubdomainResolver } from '../client/brands';
 import type { Config } from '../config';
 import { createServerShell, registerToolset } from '../server';
 import { createAllTools, type ToolContext, type ToolDefinition } from '../tools/index';
@@ -71,8 +71,8 @@ export const createReloadableServer = (
   const server = createServerShell(config, logger);
   const ctx: ToolContext = {
     subdomain: config.subdomain,
-    brandId: config.brandId,
-    resolveBrandHost: createBrandHostResolver(config.subdomain, getToken),
+    brandIds: config.brandIds,
+    resolveBrandSubdomain: createBrandSubdomainResolver(config.subdomain, getToken),
     getToken,
   };
   const params = { config, getToken, onUnauthorized, logger };

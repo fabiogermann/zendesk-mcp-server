@@ -7,7 +7,7 @@ import { isStartupError, STARTUP_DOCS } from '../../src/utils/startup-error';
 const LOAD_CONFIG_ENV = [
   'ZENDESK_SUBDOMAIN',
   'ZENDESK_OAUTH_CLIENT_ID',
-  'ZENDESK_BRAND_ID',
+  'ZENDESK_BRAND_IDS',
   'LOG_LEVEL',
   'TRANSPORT',
   'LISTEN_HOST',
@@ -80,42 +80,60 @@ describe('loadConfig', () => {
     expect(config.readOnly).toBe(true);
   });
 
-  it('leaves brandId unset by default (the account default brand)', () => {
+  it('leaves brandIds unset by default (the account default brand)', () => {
     const config = loadConfig(['mycompany']);
-    expect(config.brandId).toBeUndefined();
+    expect(config.brandIds).toBeUndefined();
   });
 
-  it('parses --brand-id flag', () => {
-    const config = loadConfig(['mycompany', '--brand-id', '123456']);
-    expect(config.brandId).toBe(123456);
+  it('parses --brand-ids as a single-entry list', () => {
+    const config = loadConfig(['mycompany', '--brand-ids', '123456']);
+    expect(config.brandIds).toEqual(['123456']);
   });
 
-  it('reads ZENDESK_BRAND_ID from env', () => {
-    process.env['ZENDESK_BRAND_ID'] = '123456';
-    const config = loadConfig(['mycompany']);
-    expect(config.brandId).toBe(123456);
+  it('parses --brand-ids as a comma-separated list of ids and subdomains', () => {
+    const config = loadConfig(['mycompany', '--brand-ids', '123456,support,7890']);
+    expect(config.brandIds).toEqual(['123456', 'support', '7890']);
   });
 
-  it('lets --brand-id win over ZENDESK_BRAND_ID', () => {
-    process.env['ZENDESK_BRAND_ID'] = '111111';
-    const config = loadConfig(['mycompany', '--brand-id', '222222']);
-    expect(config.brandId).toBe(222222);
+  it("parses --brand-ids 'all'", () => {
+    const config = loadConfig(['mycompany', '--brand-ids', 'all']);
+    expect(config.brandIds).toEqual(['all']);
   });
 
-  it('rejects a non-numeric --brand-id', () => {
-    expect(() => loadConfig(['mycompany', '--brand-id', 'abc'])).toThrow(
-      'Invalid --brand-id value',
+  it('trims whitespace around entries', () => {
+    const config = loadConfig(['mycompany', '--brand-ids', ' 123456 , support ']);
+    expect(config.brandIds).toEqual(['123456', 'support']);
+  });
+
+  it('rejects an empty entry in --brand-ids', () => {
+    expect(() => loadConfig(['mycompany', '--brand-ids', '123456,,support'])).toThrow(
+      /empty entry/i,
     );
   });
 
-  it('rejects a non-integer ZENDESK_BRAND_ID', () => {
-    process.env['ZENDESK_BRAND_ID'] = '12.5';
-    expect(() => loadConfig(['mycompany'])).toThrow();
+  it('rejects --brand-ids with only commas', () => {
+    expect(() => loadConfig(['mycompany', '--brand-ids', ',,'])).toThrow();
   });
 
-  it('rejects an empty ZENDESK_BRAND_ID', () => {
-    process.env['ZENDESK_BRAND_ID'] = '';
-    expect(() => loadConfig(['mycompany'])).toThrow('Empty ZENDESK_BRAND_ID');
+  it('reads ZENDESK_BRAND_IDS from env', () => {
+    process.env['ZENDESK_BRAND_IDS'] = '123456,support';
+    const config = loadConfig(['mycompany']);
+    expect(config.brandIds).toEqual(['123456', 'support']);
+  });
+
+  it('lets --brand-ids win over ZENDESK_BRAND_IDS', () => {
+    process.env['ZENDESK_BRAND_IDS'] = '111111';
+    const config = loadConfig(['mycompany', '--brand-ids', '222222']);
+    expect(config.brandIds).toEqual(['222222']);
+  });
+
+  it('rejects an empty ZENDESK_BRAND_IDS', () => {
+    process.env['ZENDESK_BRAND_IDS'] = '';
+    expect(() => loadConfig(['mycompany'])).toThrow('Empty ZENDESK_BRAND_IDS');
+  });
+
+  it('rejects a whitespace-only --brand-ids', () => {
+    expect(() => loadConfig(['mycompany', '--brand-ids', '   '])).toThrow();
   });
 
   it('enables the topology context by default', () => {

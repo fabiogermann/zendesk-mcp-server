@@ -131,10 +131,10 @@ export const LARGE_ARTICLE_SECTION_COUNT = 4;
 export const getBaseUrl = (subdomain: string): string => `https://${subdomain}.zendesk.com/api/v2`;
 
 // Zendesk addresses multi-brand Help Centers by HOST, not by a path segment:
-// the brand's own host (`host_mapping` when set, else the brand's zendesk.com
-// subdomain) serves the standard /api/v2/help_center path, and only that
-// brand's content. `brandHost` unset keeps the account-default URL, so a
-// single-brand account sees no behaviour change.
+// the brand's zendesk.com subdomain serves the standard /api/v2/help_center
+// path, and only that brand's content (verified live: a host-mapped brand
+// answers identically on its zendesk subdomain). `brandHost` unset keeps the
+// account-default URL, so a single-brand account sees no behaviour change.
 export const getHelpCenterBaseUrl = (subdomain: string, brandHost?: string): string =>
   `https://${brandHost ?? `${subdomain}.zendesk.com`}/api/v2/help_center`;
 
