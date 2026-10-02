@@ -1,3 +1,20 @@
+## [3.0.2](https://github.com/fruggr/zendesk-mcp-server/compare/v3.0.1...v3.0.2) (2026-10-02)
+
+### Bug Fixes
+
+* **help-center:** keep heading markup when update_article_section rewrites a body ([#334](https://github.com/fruggr/zendesk-mcp-server/issues/334)) ([9e5921e](https://github.com/fruggr/zendesk-mcp-server/commit/9e5921e5863e1b1b9c273f297850a4009815a5c8)), closes [#331](https://github.com/fruggr/zendesk-mcp-server/issues/331), references [#332](https://github.com/fruggr/zendesk-mcp-server/issues/332) [#331](https://github.com/fruggr/zendesk-mcp-server/issues/331) [#332](https://github.com/fruggr/zendesk-mcp-server/issues/332) [#328](https://github.com/fruggr/zendesk-mcp-server/issues/328) [#331](https://github.com/fruggr/zendesk-mcp-server/issues/331)
+
+<details>
+<summary>🔧 Internal changes (chore, ci, build, refactor, tests, docs…)</summary>
+
+### Chores
+
+* **deps:** lock file maintenance ([#336](https://github.com/fruggr/zendesk-mcp-server/issues/336)) ([26b60a2](https://github.com/fruggr/zendesk-mcp-server/commit/26b60a2094b37e519e125345240bd43b6508a024))
+* **deps:** lock file maintenance ([#337](https://github.com/fruggr/zendesk-mcp-server/issues/337)) ([1a2306b](https://github.com/fruggr/zendesk-mcp-server/commit/1a2306bb1d35e4e7de5268b6abf9fe51cce92559))
+* **deps:** temporarily pin pnpm to 12.5.1 ([#338](https://github.com/fruggr/zendesk-mcp-server/issues/338)) ([8c91638](https://github.com/fruggr/zendesk-mcp-server/commit/8c91638cfda5c077e346e8d936f982ac1c83a134)), references [#312](https://github.com/fruggr/zendesk-mcp-server/issues/312)
+* **deps:** update pnpm to v12.7.0 ([#335](https://github.com/fruggr/zendesk-mcp-server/issues/335)) ([a3e3ce5](https://github.com/fruggr/zendesk-mcp-server/commit/a3e3ce5e4513d7fdc1a1cac9f21311f6e953da69))
+</details>
+
 ## [3.0.1](https://github.com/fruggr/zendesk-mcp-server/compare/v3.0.0...v3.0.1) (2026-09-30)
 
 ### Bug Fixes
