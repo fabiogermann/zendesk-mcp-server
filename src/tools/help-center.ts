@@ -149,18 +149,32 @@ export const resolveBrand = async (
   }
   const resolved = await resolveSubdomain(String(perCall));
   if (isAll) return resolved;
-  // multi: check membership by id or resolved subdomain.
-  const allowed = new Set<string>();
-  for (const entry of brandIds) {
-    allowed.add(entry);
-    allowed.add(await resolveSubdomain(entry));
+  await assertAllowed(perCall, resolved, brandIds, resolveSubdomain);
+  return resolved;
+};
+
+// multi-mode membership: an exact id/subdomain match short-circuits before any
+// allow-list entry is resolved — a typo'd or since-deleted entry in --brand-ids
+// must not break calls that name a valid brand. Remaining entries resolve with
+// failures tolerated (allSettled): an unresolvable entry simply can't match, it
+// doesn't take the whole call down with it.
+const assertAllowed = async (
+  perCall: number,
+  resolved: string,
+  brandIds: string[],
+  resolveSubdomain: (idOrSubdomain: string) => Promise<string>,
+): Promise<void> => {
+  if (brandIds.includes(String(perCall))) return;
+  const settled = await Promise.allSettled(brandIds.map((entry) => resolveSubdomain(entry)));
+  const allowed = new Set<string>(brandIds);
+  for (const r of settled) {
+    if (r.status === 'fulfilled') allowed.add(r.value);
   }
-  if (!allowed.has(String(perCall)) && !allowed.has(resolved)) {
+  if (!allowed.has(resolved)) {
     throw new Error(
       `brand_id ${perCall} is not allowed: this server was started with --brand-ids ${brandIds.join(', ')}. Allowed: ${[...allowed].join(', ')}.`,
     );
   }
-  return resolved;
 };
 
 // The article `translations` list endpoint, shared by every read tool that
