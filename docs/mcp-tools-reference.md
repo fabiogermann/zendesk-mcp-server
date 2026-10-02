@@ -38,7 +38,7 @@ out every `write` tool before the proxies are built.
 <details>
 <summary><strong>Help Center</strong></summary>
 
-When the server is started with `--brand-ids`, every brand-scoped Help Center
+When `--brand-ids` names several brands or `all`, every brand-scoped Help Center
 tool (all of them except `list_brands`, `list_permission_groups`,
 `list_content_tags`, `create_content_tag` and `list_user_segments`) takes a
 **required** `brand_id` parameter naming the brand for that call — by id or
