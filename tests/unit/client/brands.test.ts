@@ -94,4 +94,66 @@ describe('createBrandSubdomainResolver', () => {
     const resolve = createBrandSubdomainResolver(SUBDOMAIN, () => TOKEN);
     await expect(resolve('424242')).rejects.toThrow(/Unknown brand/);
   });
+
+  it('sends page[size] on the FIRST request, not just on cursor-follow-ups', async () => {
+    // Regression: without page[size] the endpoint offset-paginates, answers
+    // without meta.after_cursor, and brands past the first page resolve as
+    // Unknown. The very first request must already carry the page size.
+    const seenSizes: (string | null)[] = [];
+    mswServer.use(
+      http.get('https://testsubdomain.zendesk.com/api/v2/brands', ({ request }) => {
+        seenSizes.push(new URL(request.url).searchParams.get('page[size]'));
+        return HttpResponse.json({
+          brands: [
+            {
+              id: 424242,
+              name: 'Second brand',
+              brand_url: 'https://brand424242.zendesk.com',
+              subdomain: 'brand424242',
+              host_mapping: null,
+              default: false,
+              active: true,
+            },
+          ],
+          meta: { has_more: false, after_cursor: '' },
+        });
+      }),
+    );
+    const resolve = createBrandSubdomainResolver(SUBDOMAIN, () => TOKEN);
+    await resolve('424242');
+    expect(seenSizes).toHaveLength(1);
+    expect(seenSizes[0]).toBe('100');
+  });
+
+  it('throws when has_more is true but after_cursor is missing', async () => {
+    // Cursor-progress guard: a "more pages" signal with no usable cursor would
+    // otherwise loop forever or silently stop after page 1.
+    mswServer.use(
+      http.get('https://testsubdomain.zendesk.com/api/v2/brands', () =>
+        HttpResponse.json({ brands: [], meta: { has_more: true, after_cursor: '' } }),
+      ),
+    );
+    const resolve = createBrandSubdomainResolver(SUBDOMAIN, () => TOKEN);
+    await expect(resolve('424242')).rejects.toThrow(/no usable after_cursor/);
+  });
+
+  it('throws when after_cursor is identical to the cursor just sent (no progress)', async () => {
+    // Cursor-progress guard: the server echoed the same cursor back, so the
+    // next request would re-fetch the same page and report duplicate brands.
+    let calls = 0;
+    mswServer.use(
+      http.get('https://testsubdomain.zendesk.com/api/v2/brands', () => {
+        calls += 1;
+        return HttpResponse.json({
+          brands: [],
+          meta: { has_more: true, after_cursor: 'cursor2' },
+        });
+      }),
+    );
+    const resolve = createBrandSubdomainResolver(SUBDOMAIN, () => TOKEN);
+    await expect(resolve('424242')).rejects.toThrow(/no usable after_cursor/);
+    // First page (no cursor) → after_cursor 'cursor2'; second page sends
+    // 'cursor2' and gets 'cursor2' back → guard trips on the second response.
+    expect(calls).toBe(2);
+  });
 });

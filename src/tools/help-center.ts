@@ -87,15 +87,18 @@ const ARTICLE_ID_DESC =
 
 // Shared `brand_id` input field factory. In unset/single mode the field is
 // ABSENT from the schema (strict parsing rejects it); in multi/all mode it is
-// REQUIRED (not .optional()) and described with the allowed set.
+// REQUIRED (not .optional()) and described with the allowed set. The value may
+// be a numeric brand id OR the brand's subdomain (the resolver accepts both),
+// so the schema is a union — a bare z.number() would reject a documented
+// subdomain like 'docs' at validation time, before resolution could accept it.
 const brandIdField = (brandIds: string[] | undefined) => {
   if (!brandIds || brandIds.length === 0) return undefined;
   if (brandIds.length === 1 && brandIds[0] !== 'all') return undefined;
   const description =
     brandIds[0] === 'all'
-      ? 'Brand ID of the Help Center to operate on. Required: any brand from list_brands.'
-      : `Brand ID of the Help Center to operate on. Required: one of ${brandIds.join(', ')}.`;
-  return z.number().int().describe(description);
+      ? 'Brand of the Help Center to operate on, by id or subdomain. Required: any brand from list_brands.'
+      : `Brand of the Help Center to operate on, by id or subdomain. Required: one of ${brandIds.join(', ')}.`;
+  return z.union([z.number().int(), z.string().min(1)]).describe(description);
 };
 
 /**
@@ -113,7 +116,7 @@ const brandIdField = (brandIds: string[] | undefined) => {
  * Returns the brand's subdomain, or undefined for the account default.
  */
 export const resolveBrand = async (
-  perCall: number | undefined,
+  perCall: number | string | undefined,
   brandIds: string[] | undefined,
   resolveSubdomain: (idOrSubdomain: string) => Promise<string>,
 ): Promise<string | undefined> => {
@@ -159,7 +162,7 @@ export const resolveBrand = async (
 // failures tolerated (allSettled): an unresolvable entry simply can't match, it
 // doesn't take the whole call down with it.
 const assertAllowed = async (
-  perCall: number,
+  perCall: number | string,
   resolved: string,
   brandIds: string[],
   resolveSubdomain: (idOrSubdomain: string) => Promise<string>,
@@ -682,7 +685,7 @@ const createListBrandsTool = (ctx: ToolContext): ToolDefinition[] => {
       readOnly: true,
       title: 'List Zendesk Brands',
       description:
-        "List the Zendesk account's brands (id, name, URL, default/active flags) from the Support API. Multi-brand Guide accounts have one Help Center per brand: find the brand id here, then pass it as brand_id to any Help Center tool. Unneeded on single-brand accounts — the default brand is implicit.",
+        "List the Zendesk account's brands (id, name, URL, default/active flags) from the Support API. Multi-brand Guide accounts have one Help Center per brand: find the brand id here, then pass it as brand_id (id or subdomain) — REQUIRED on every brand-scoped Help Center tool in multi/all mode.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: true,
@@ -695,7 +698,10 @@ const createListBrandsTool = (ctx: ToolContext): ToolDefinition[] => {
         // Brands live on the account-wide Support API, never under the
         // brand-scoped Help Center base — this call stays unscoped on purpose.
         // The endpoint cursor-paginates; follow it so a large account does not
-        // silently hide the brand a caller is looking for.
+        // silently hide the brand a caller is looking for. NOTE: this walks
+        // /brands itself rather than sharing the resolver's cached list —
+        // intentional: list_brands must show a fresh, complete, unfiltered
+        // listing even if the resolver's cache was primed by an earlier call.
         const brands: ZendeskBrand[] = [];
         let cursor: string | undefined;
         do {
@@ -743,7 +749,9 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
   // request), then the cached resolver maps the entry to its subdomain and the
   // host is built from it. Undefined means the account default brand — no
   // resolution, no extra request.
-  const resolveHost = async (brand_id: number | undefined): Promise<string | undefined> => {
+  const resolveHost = async (
+    brand_id: number | string | undefined,
+  ): Promise<string | undefined> => {
     const sub = await resolveBrand(brand_id, brandIds, resolveBrandSubdomain);
     return sub === undefined ? undefined : `${sub}.zendesk.com`;
   };
@@ -885,7 +893,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           locale?: string;
           per_page: number;
           page: number;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -934,7 +942,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const { article_id, locale, brand_id } = params as {
           article_id: number;
           locale?: string;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1008,7 +1016,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           locale?: string;
           page_size: number;
           cursor?: string;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1081,7 +1089,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           locale?: string;
           page_size: number;
           cursor?: string;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1179,7 +1187,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           sort_by: string;
           sort_order: string;
           include_translations: boolean;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1242,7 +1250,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         openWorldHint: true,
       },
       handler: async (params) => {
-        const { brand_id } = params as { brand_id?: number };
+        const { brand_id } = params as { brand_id?: number | string };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
         const { articles, truncated, pagesScanned } = await fetchPromotedArticles(
@@ -1291,7 +1299,10 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         openWorldHint: true,
       },
       handler: async (params) => {
-        const { article_id, brand_id } = params as { article_id: number; brand_id?: number };
+        const { article_id, brand_id } = params as {
+          article_id: number;
+          brand_id?: number | string;
+        };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
         const translations = await listTranslations(
@@ -1348,7 +1359,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           title: string;
           body: string;
           draft: boolean;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1414,7 +1425,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const { article_id, locale, brand_id, ...updates } = params as {
           article_id: number;
           locale: string;
-          brand_id?: number;
+          brand_id?: number | string;
         } & Record<string, unknown>;
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1458,7 +1469,10 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         openWorldHint: true,
       },
       handler: async (params) => {
-        const { section_id, brand_id } = params as { section_id: number; brand_id?: number };
+        const { section_id, brand_id } = params as {
+          section_id: number;
+          brand_id?: number | string;
+        };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
         const translations = await listNodeTranslations(
@@ -1507,7 +1521,10 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         openWorldHint: true,
       },
       handler: async (params) => {
-        const { category_id, brand_id } = params as { category_id: number; brand_id?: number };
+        const { category_id, brand_id } = params as {
+          category_id: number;
+          brand_id?: number | string;
+        };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
         const translations = await listNodeTranslations(
@@ -1565,7 +1582,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const { locale, category_id, brand_id } = params as {
           locale: string;
           category_id?: number;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1673,7 +1690,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           name?: string;
           description?: string;
           draft?: boolean;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1748,7 +1765,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           name?: string;
           description?: string;
           draft?: boolean;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1891,7 +1908,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { section_id, brand_id, ...articleData } = params as {
           section_id: number;
-          brand_id?: number;
+          brand_id?: number | string;
         } & Record<string, unknown>;
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -1984,7 +2001,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       handler: async (params) => {
         const { article_id, brand_id, ...updates } = params as {
           article_id: number;
-          brand_id?: number;
+          brand_id?: number | string;
         } & Record<string, unknown>;
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -2062,7 +2079,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           reference_article_id?: number;
           normalize?: boolean;
           confirm?: boolean;
-          brand_id?: number;
+          brand_id?: number | string;
         };
 
         // Cross-field validation (the schema is a plain object; enforce the
@@ -2183,7 +2200,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const { article_id, confirm, brand_id } = params as {
           article_id: number;
           confirm: boolean;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         if (confirm !== true) {
           throw new Error(
@@ -2334,7 +2351,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         openWorldHint: true,
       },
       handler: async (params) => {
-        const { brand_id } = params as { brand_id?: number };
+        const { brand_id } = params as { brand_id?: number | string };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
         const response = await helpCenterGet<{ labels: ZendeskLabel[]; count: number }>(
@@ -2365,26 +2382,25 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
       readOnly: true,
       title: 'List User Segments',
       description:
-        'List all user segments. User segments control article visibility (who can view). Use the ID when creating or updating articles.',
-      inputSchema: z.object({
-        ...brandIdPart,
-      }),
+        'List all user segments. User segments control article visibility (who can view). Use the ID when creating or updating articles. User segments are account-wide (shared across brands), so no brand_id is accepted.',
+      inputSchema: z.object({}),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: true,
       },
-      handler: async (params) => {
-        const { brand_id } = params as { brand_id?: number };
+      handler: async () => {
         const token = await getToken();
-        const effectiveBrandHost = await resolveHost(brand_id);
+        // User segments are ACCOUNT-WIDE (shared across brands — the endpoint
+        // has no brand dimension), so this call is deliberately NOT brand-scoped,
+        // matching the topology resource's unscoped fetch.
         let response: { user_segments: ZendeskUserSegment[]; count: number };
         try {
           response = await helpCenterGet<{
             user_segments: ZendeskUserSegment[];
             count: number;
-          }>(subdomain, token, '/user_segments', undefined, effectiveBrandHost);
+          }>(subdomain, token, '/user_segments', undefined);
         } catch (error) {
           // GET /help_center/user_segments requires Guide-admin / Help Center manager
           // rights. Rewrite the generic 403 into actionable guidance with the
@@ -2433,7 +2449,10 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         openWorldHint: true,
       },
       handler: async (params) => {
-        const { article_id, brand_id } = params as { article_id: number; brand_id?: number };
+        const { article_id, brand_id } = params as {
+          article_id: number;
+          brand_id?: number | string;
+        };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
         const response = await helpCenterGet<{
@@ -2486,7 +2505,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
         const { article_id, locale, brand_id } = params as {
           article_id: number;
           locale?: string;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -2573,7 +2592,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           locale: string;
           section_index: number;
           format: 'html' | 'markdown';
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -2651,7 +2670,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           section_index: number;
           content: string;
           format: 'html' | 'markdown';
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -2710,7 +2729,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           article_id: number;
           source_locale: string;
           target_locale: string;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);
@@ -2810,7 +2829,7 @@ export const createHelpCenterTools = (ctx: ToolContext): ToolDefinition[] => {
           file_name: string;
           file_base64: string;
           content_type: string;
-          brand_id?: number;
+          brand_id?: number | string;
         };
         const token = await getToken();
         const effectiveBrandHost = await resolveHost(brand_id);

@@ -40,13 +40,15 @@ out every `write` tool before the proxies are built.
 
 When the server is started with `--brand-ids`, every brand-scoped Help Center
 tool (all of them except `list_brands`, `list_permission_groups`,
-`list_content_tags` and `create_content_tag`) takes a **required** `brand_id`
-parameter naming the brand for that call — restricted to the allow-list (or any
-brand with `--brand-ids all`). There is no silent default: a call without
-`brand_id` fails. Ids come from `list_brands`, which is only exposed in this
-mode. With a single `--brand-ids` entry the server is locked to that brand and
-no schema carries `brand_id`; with the flag unset the account default brand is
-used and `brand_id` does not exist.
+`list_content_tags`, `create_content_tag` and `list_user_segments`) takes a
+**required** `brand_id` parameter naming the brand for that call — by id or
+subdomain — restricted to the allow-list (or any brand with `--brand-ids all`).
+There is no silent default: a call without `brand_id` fails. Ids and subdomains
+come from `list_brands`, which is only exposed in this mode. With a single
+`--brand-ids` entry the server is locked to that brand and no schema carries
+`brand_id`; with the flag unset the account default brand is used and
+`brand_id` does not exist. `list_user_segments` is account-wide (user segments
+are shared across brands) and never takes `brand_id`.
 
 | Tool | Description | Mode |
 |------|-------------|------|
@@ -67,7 +69,7 @@ used and `brand_id` does not exist.
 | `list_permission_groups` | List Guide permission groups (needed to create articles; requires Guide-admin / Help Center manager rights) | read |
 | `list_content_tags` | List Guide content tags (end-user visible), cursor-paginated with name-prefix filter and sort | read |
 | `list_labels` | List article labels (search ranking, not user-visible) | read |
-| `list_user_segments` | List user segments (article visibility; requires Guide-admin / Help Center manager rights) | read |
+| `list_user_segments` | List user segments (article visibility; account-wide, no `brand_id`; requires Guide-admin / Help Center manager rights) | read |
 | `compare_translations` | Compare two locales of an article: target freshness (from updated_at), Zendesk `outdated` flag, structural verdict, and per-section presence status (word counts informational) | read |
 | `create_article` | Create a new article in a section | write |
 | `update_article` | Update article metadata (draft, promoted, labels, tags, visibility, section, sort position) | write |

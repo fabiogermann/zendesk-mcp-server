@@ -105,6 +105,11 @@ describe('loadConfig', () => {
     expect(() => loadConfig(['mycompany', '--brand-ids', '123456,,support'])).toThrow(
       /empty entry/i,
     );
+    // Pin the whole message: it is the operator's only hint at the accepted
+    // shape (ids or subdomains, or "all"), so the guidance must not regress.
+    expect(() => loadConfig(['mycompany', '--brand-ids', '123456,,support'])).toThrow(
+      /comma-separated list of brand ids or subdomains, or "all"/,
+    );
   });
 
   it('rejects --brand-ids with only commas', () => {
@@ -121,6 +126,32 @@ describe('loadConfig', () => {
     process.env['ZENDESK_BRAND_IDS'] = '111111';
     const config = loadConfig(['mycompany', '--brand-ids', '222222']);
     expect(config.brandIds).toEqual(['222222']);
+  });
+
+  it("matches 'all' case-insensitively, so 'ALL' is not a single-brand lock on a brand named ALL", () => {
+    // 'ALL' written in caps is the flag, not a brand literally named ALL — it
+    // must resolve to the all-brands mode, not to a one-entry allow-list.
+    expect(loadConfig(['mycompany', '--brand-ids', 'ALL']).brandIds).toEqual(['all']);
+    expect(loadConfig(['mycompany', '--brand-ids', 'All']).brandIds).toEqual(['all']);
+  });
+
+  it("rejects 'ALL' combined with other entries, like lowercase 'all'", () => {
+    expect(() => loadConfig(['mycompany', '--brand-ids', 'ALL,123456'])).toThrow(
+      /cannot be combined/,
+    );
+  });
+
+  it('de-duplicates entries after trim, so A,A collapses to a single-brand lock', () => {
+    // 'A,A' names ONE brand twice; without collapsing, two entries would mean
+    // multi mode (list_brands exposed, per-call brand_id required) for a single
+    // brand. Order is preserved for the surviving entries.
+    expect(loadConfig(['mycompany', '--brand-ids', 'support,support']).brandIds).toEqual([
+      'support',
+    ]);
+    expect(loadConfig(['mycompany', '--brand-ids', 'support, docs ,support']).brandIds).toEqual([
+      'support',
+      'docs',
+    ]);
   });
 
   it('rejects an empty ZENDESK_BRAND_IDS', () => {
