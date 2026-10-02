@@ -267,12 +267,19 @@ const parseBrandIds = (raw: string | undefined): string[] | undefined => {
         'Expected a comma-separated list of brand ids or subdomains, or "all".',
     );
   }
-  if (entries.length > 1 && entries.includes('all')) {
+  // 'all' is matched case-insensitively: 'ALL' is the flag written in caps, not
+  // a brand literally named ALL. Normalized to lowercase so every downstream
+  // check (the schema gate, resolveBrand, list_brands) sees the canonical form.
+  const normalized = entries.map((entry) => (entry.toLowerCase() === 'all' ? 'all' : entry));
+  if (normalized.length > 1 && normalized.includes('all')) {
     throw new Error(
       'Invalid --brand-ids / ZENDESK_BRAND_IDS value: "all" cannot be combined with brand ids or subdomains.',
     );
   }
-  return entries;
+  // De-duplicate after trim, preserving order: 'A,A' is one brand named twice,
+  // and without collapsing it the two entries would resolve to multi mode —
+  // exposing list_brands and requiring a per-call brand_id — for a single brand.
+  return [...new Set(normalized)];
 };
 
 // The whole CLI surface as one declarative table: `parseArgs` derives the

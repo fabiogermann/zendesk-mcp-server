@@ -1,3 +1,4 @@
+import { MAX_PAGE_SIZE } from '../constants';
 import type { ZendeskBrand, ZendeskListResponse } from '../types';
 import { zendeskGet } from './zendesk-api';
 
@@ -12,7 +13,12 @@ import { zendeskGet } from './zendesk-api';
  */
 export type BrandSubdomainResolver = (idOrSubdomain: string) => Promise<string>;
 
-/** Fetch every brand of the account (cursor-paginated). */
+/**
+ * Fetch every brand of the account (cursor-paginated). `page[size]` is sent on
+ * the FIRST request too: without it Zendesk falls back to OFFSET pagination,
+ * which answers without `meta.after_cursor`, and the loop below would stop
+ * after page 1 — a brand past the first 100 would resolve as Unknown.
+ */
 const fetchAllBrands = async (subdomain: string, token: string): Promise<ZendeskBrand[]> => {
   // Stryker disable next-line ArrayDeclaration: a seeded array would only add a
   // non-brand entry, which no id/subdomain lookup can match — equivalent.
@@ -23,15 +29,29 @@ const fetchAllBrands = async (subdomain: string, token: string): Promise<Zendesk
       subdomain,
       token,
       '/brands',
-      cursor ? { 'page[after]': cursor } : undefined,
+      {
+        'page[size]': String(MAX_PAGE_SIZE),
+        ...(cursor ? { 'page[after]': cursor } : {}),
+      },
     );
     // Stryker disable next-line ArrayDeclaration: same reasoning as the seed
     // above — a junk fallback entry is unresolvable by id or subdomain.
     brands.push(...(response.brands ?? []));
-    cursor =
-      response.meta?.has_more && response.meta.after_cursor
-        ? response.meta.after_cursor
-        : undefined;
+    const meta = response.meta;
+    if (meta?.has_more) {
+      // Cursor-pagination contract: more pages must come with a NEW cursor. A
+      // missing or repeated one means the server is stuck (or offset-paginating
+      // despite page[size]) — looping would either spin forever or re-fetch the
+      // same page and report duplicate brands.
+      if (!meta.after_cursor || meta.after_cursor === cursor) {
+        throw new Error(
+          'GET /brands reported more pages but returned no usable after_cursor (missing or identical to the cursor just sent). Cannot continue pagination safely.',
+        );
+      }
+      cursor = meta.after_cursor;
+    } else {
+      cursor = undefined;
+    }
   } while (cursor);
   return brands;
 };

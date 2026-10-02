@@ -60,6 +60,7 @@ describe('help center tools', () => {
       'list_permission_groups',
       'list_content_tags',
       'create_content_tag',
+      'list_user_segments',
     ]);
 
     it('no brand-scoped tool has a brand_id field when --brand-ids is unset', () => {
@@ -102,6 +103,48 @@ describe('help center tools', () => {
       expect(tool.inputSchema.shape['brand_id']).toBeDefined();
       expect(tool.inputSchema.safeParse({}).success).toBe(false);
       expect(tool.inputSchema.safeParse({ brand_id: 424242 }).success).toBe(true);
+    });
+
+    it('accepts a SUBDOMAIN string as brand_id, not only a numeric id', () => {
+      // Regression: the description tells the caller to pass one of the allowed
+      // subdomains (e.g. 'docs'), but a bare z.number() rejected the string at
+      // validation time before the resolver (which accepts both) could see it.
+      const multiCtx: ToolContext = { ...ctx, brandIds: ['support', 'docs'] };
+      const tool = createHelpCenterTools(multiCtx).find((t) => t.name === 'list_categories');
+      if (!tool) throw new Error('list_categories not found');
+      expect(tool.inputSchema.safeParse({ brand_id: 'docs' }).success).toBe(true);
+      expect(tool.inputSchema.safeParse({ brand_id: 424242 }).success).toBe(true);
+      // Still rejected: missing, and an empty string is not a valid subdomain.
+      expect(tool.inputSchema.safeParse({}).success).toBe(false);
+      expect(tool.inputSchema.safeParse({ brand_id: '' }).success).toBe(false);
+    });
+
+    it('list_user_segments has NO brand_id field even in multi mode (segments are account-wide)', () => {
+      // User segments are shared across brands — the endpoint has no brand
+      // dimension — so requiring brand_id would force a meaningless parameter.
+      const multiCtx: ToolContext = { ...ctx, brandIds: ['424242', '777777'] };
+      const tool = createHelpCenterTools(multiCtx).find((t) => t.name === 'list_user_segments');
+      if (!tool) throw new Error('list_user_segments not found');
+      expect('brand_id' in tool.inputSchema.shape).toBe(false);
+      // And it parses with no params at all.
+      expect(tool.inputSchema.safeParse({}).success).toBe(true);
+    });
+
+    it('list_user_segments does NOT scope the request to a brand host (account-wide)', async () => {
+      // The fetch must hit the account default host, not a per-brand host,
+      // matching the topology resource's unscoped /user_segments fetch.
+      let seenUrl = '';
+      mswServer.use(
+        http.get(`${HC_BASE}/user_segments`, ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json({ user_segments: [] });
+        }),
+      );
+      const multiCtx: ToolContext = { ...ctx, brandIds: ['424242', '777777'] };
+      const tool = createHelpCenterTools(multiCtx).find((t) => t.name === 'list_user_segments');
+      if (!tool) throw new Error('list_user_segments not found');
+      await tool.handler({});
+      expect(seenUrl).toContain('testsubdomain.zendesk.com');
     });
   });
 

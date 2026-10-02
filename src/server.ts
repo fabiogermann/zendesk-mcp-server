@@ -179,6 +179,16 @@ export const createServerShell = (config: Config, logger: Logger = silentLogger)
 export interface ToolsetParams {
   config: Config;
   getToken: () => string | Promise<string>;
+  /**
+   * THE shared brand subdomain resolver for this server generation. Created
+   * ONCE by createMcpServer / createReloadableServer and passed here so the
+   * tools AND the topology/article resources resolve against a single cached
+   * brand list — otherwise each consumer builds its own and one session costs
+   * several `GET /brands` walks. Optional so test harnesses that register a
+   * toolset without brands can omit it; the resources then fall back to a
+   * local resolver (unset brandIds makes it a no-op anyway).
+   */
+  resolveBrandSubdomain?: (idOrSubdomain: string) => Promise<string>;
   // Called when a tool handler hits a 401 from Zendesk. Lets the OAuth token
   // store invalidate the rejected token. Omitted where there is nothing to
   // invalidate (e.g. the HTTP per-session bearer is owned by the client).
@@ -189,21 +199,19 @@ export interface ToolsetParams {
 /**
  * Lazily resolve the Help Center host the topology/article resources pin to:
  * the FIRST allowed brand when a list is set (named in the header), else the
- * account default. The resolver is cached per (subdomain, id-or-subdomain) in
- * client/brands, so the topology and article resources share one resolution;
- * it only fires when a brand list is set. Providers await it per read (cheap
- * after the first), since registerToolset is synchronous and cannot resolve
- * the host up front.
+ * account default. Uses the SHARED resolver so the topology and article
+ * resources hit the same cached brand list the tools use; it only fires when a
+ * brand list is set. Providers await it per read (cheap after the first),
+ * since registerToolset is synchronous and cannot resolve the host up front.
  */
 const firstBrandHostResolver = (
   config: Config,
-  getToken: () => string | Promise<string>,
+  resolveBrandSubdomain: (idOrSubdomain: string) => Promise<string>,
 ): (() => Promise<string | undefined>) => {
   const first = config.brandIds?.[0];
   if (first === undefined || first === 'all') return () => Promise.resolve(undefined);
-  const resolver = createBrandSubdomainResolver(config.subdomain, getToken);
   return async () => {
-    const sub = await resolver(first);
+    const sub = await resolveBrandSubdomain(first);
     return `${sub}.zendesk.com`;
   };
 };
@@ -220,9 +228,13 @@ const firstBrandHostResolver = (
  */
 export const registerToolset = (
   server: McpServer,
-  { config, getToken, onUnauthorized, logger = silentLogger }: ToolsetParams,
+  { config, getToken, resolveBrandSubdomain, onUnauthorized, logger = silentLogger }: ToolsetParams,
   tools: ToolDefinition[],
 ): { dispose(): void; count: number } => {
+  // Fall back to a local resolver only when the caller did not share one
+  // (test harnesses, --print-tools). Production callers always pass it.
+  const sharedResolver =
+    resolveBrandSubdomain ?? createBrandSubdomainResolver(config.subdomain, getToken);
   const registered: Removable[] = [];
   const dispose = (): void => {
     for (const handle of registered) handle.remove();
@@ -319,7 +331,7 @@ export const registerToolset = (
         config.subdomain,
         onUnauthorized,
         config.brandIds,
-        firstBrandHostResolver(config, getToken),
+        firstBrandHostResolver(config, sharedResolver),
       );
       registered.push(
         server.registerResource(
@@ -350,7 +362,7 @@ export const registerToolset = (
         getToken,
         config.subdomain,
         onUnauthorized,
-        firstBrandHostResolver(config, getToken),
+        firstBrandHostResolver(config, sharedResolver),
       );
       const listPromotedEnabled = promotedArticlesEnabled(config);
       const template = new ResourceTemplate(articleResourceUriTemplate(config), {
@@ -433,6 +445,10 @@ export const createMcpServer = (
   onUnauthorized?: () => void,
 ): McpServer => {
   const server = createServerShell(config, logger);
+  // ONE shared resolver for the whole server: tools, topology resource and
+  // article resources all resolve against this single cached brand list, so a
+  // session costs at most one `GET /brands` walk no matter how many consumers
+  // resolve a brand.
   const resolveBrandSubdomain = createBrandSubdomainResolver(config.subdomain, getToken);
   const tools = createAllTools({
     subdomain: config.subdomain,
@@ -440,6 +456,10 @@ export const createMcpServer = (
     resolveBrandSubdomain,
     getToken,
   });
-  registerToolset(server, { config, getToken, onUnauthorized, logger }, tools);
+  registerToolset(
+    server,
+    { config, getToken, resolveBrandSubdomain, onUnauthorized, logger },
+    tools,
+  );
   return server;
 };

@@ -280,7 +280,9 @@ The value shapes the tool surface:
   likewise required, accepting any brand.
 
 The account-wide Guide tools (`list_permission_groups`, `list_content_tags`,
-`create_content_tag`) take no `brand_id` — they have no brand dimension.
+`create_content_tag`, `list_user_segments`) take no `brand_id` — they have no
+brand dimension (user segments are shared across brands). Everywhere else
+`brand_id` accepts a brand id **or** its subdomain.
 
 ### `OAUTH_CALLBACK_PORT`
 **Required:** no · **Default:** `27439`

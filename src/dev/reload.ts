@@ -69,13 +69,16 @@ export const createReloadableServer = (
   loadTools: (ctx: ToolContext) => Promise<ToolDefinition[]> = loadFreshTools,
 ): { server: McpServer; reload: () => Promise<number> } => {
   const server = createServerShell(config, logger);
+  // ONE shared resolver across every reload generation: tools and the
+  // topology/article resources resolve against the same cached brand list.
+  const resolveBrandSubdomain = createBrandSubdomainResolver(config.subdomain, getToken);
   const ctx: ToolContext = {
     subdomain: config.subdomain,
     brandIds: config.brandIds,
-    resolveBrandSubdomain: createBrandSubdomainResolver(config.subdomain, getToken),
+    resolveBrandSubdomain,
     getToken,
   };
-  const params = { config, getToken, onUnauthorized, logger };
+  const params = { config, getToken, resolveBrandSubdomain, onUnauthorized, logger };
 
   // The last generation registered successfully — both the handle (to dispose)
   // and its definitions (to restore if a reload's re-registration fails).
