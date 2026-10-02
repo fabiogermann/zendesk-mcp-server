@@ -58,6 +58,29 @@ describe('resolveBrand', () => {
     it('rejects a per-call brand_id not in the list', async () => {
       await expect(resolveBrand(999, ['111', '222'], stubResolver)).rejects.toThrow(/not allowed/);
     });
+
+    it('tolerates an unresolvable allow-list entry when the per-call brand is valid', async () => {
+      // A typo'd or since-deleted entry must not break calls naming a valid brand.
+      const flakyResolver = (s: string): Promise<string> =>
+        s === 'typo' ? Promise.reject(new Error('Unknown brand "typo"')) : stubResolver(s);
+      await expect(resolveBrand(111, ['111', 'typo'], flakyResolver)).resolves.toBe('brand111');
+    });
+
+    it('short-circuits an exact id match before resolving allow-list entries', async () => {
+      // The per-call brand_id matches an entry verbatim, so no entry resolution
+      // happens at all — the bad entry is never even looked up.
+      const flakyResolver = (s: string): Promise<string> =>
+        s === 'typo' ? Promise.reject(new Error('Unknown brand "typo"')) : stubResolver(s);
+      await expect(resolveBrand(111, ['111', 'typo'], flakyResolver)).resolves.toBe('brand111');
+    });
+
+    it('still rejects a per-call brand that matches no entry even when another entry is bad', async () => {
+      const flakyResolver = (s: string): Promise<string> =>
+        s === 'typo' ? Promise.reject(new Error('Unknown brand "typo"')) : stubResolver(s);
+      await expect(resolveBrand(999, ['111', 'typo'], flakyResolver)).rejects.toThrow(
+        /not allowed/,
+      );
+    });
   });
 
   describe("'all'", () => {

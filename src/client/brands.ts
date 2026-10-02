@@ -40,27 +40,32 @@ export const createBrandSubdomainResolver = (
   subdomain: string,
   getToken: () => string | Promise<string>,
 ): BrandSubdomainResolver => {
-  const cache = new Map<string, Promise<string>>();
-  return (idOrSubdomain) => {
-    const hit = cache.get(idOrSubdomain);
-    if (hit) return hit;
-    const pending = (async () => {
-      const token = await getToken();
-      const brands = await fetchAllBrands(subdomain, token);
-      const byId = brands.find((b) => String(b.id) === idOrSubdomain);
-      const bySubdomain = brands.find((b) => b.subdomain === idOrSubdomain);
-      const brand = byId ?? bySubdomain;
-      if (!brand) {
-        throw new Error(
-          `Unknown brand "${idOrSubdomain}": no brand with that id or subdomain exists on this account. Check --brand-ids / ZENDESK_BRAND_IDS, or call list_brands to see the available brands.`,
-        );
-      }
-      return brand.subdomain;
-    })();
-    // A rejection is evicted so the next call retries with a fresh token
-    // rather than caching a transient 401/5xx forever.
-    pending.catch(() => cache.delete(idOrSubdomain));
-    cache.set(idOrSubdomain, pending);
-    return pending;
+  // The brand LIST is cached once (one memoised promise), not per id-or-subdomain
+  // key: every lookup resolves against the same fetch, so N allow-list entries
+  // and any number of distinct brand_ids cost one /brands walk total, not N+1.
+  // A rejection is evicted so the next lookup retries with a fresh token rather
+  // than caching a transient 401/5xx forever.
+  let listPromise: Promise<ZendeskBrand[]> | undefined;
+  const brands = (): Promise<ZendeskBrand[]> => {
+    if (!listPromise) {
+      listPromise = (async () => fetchAllBrands(subdomain, await getToken()))();
+      listPromise.catch(() => {
+        listPromise = undefined;
+      });
+    }
+    return listPromise;
+  };
+
+  return async (idOrSubdomain) => {
+    const all = await brands();
+    const brand =
+      all.find((b) => String(b.id) === idOrSubdomain) ??
+      all.find((b) => b.subdomain === idOrSubdomain);
+    if (!brand) {
+      throw new Error(
+        `Unknown brand "${idOrSubdomain}": no brand with that id or subdomain exists on this account. Check --brand-ids / ZENDESK_BRAND_IDS, or call list_brands to see the available brands.`,
+      );
+    }
+    return brand.subdomain;
   };
 };
