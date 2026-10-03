@@ -1,3 +1,9 @@
+## [3.1.2](https://github.com/fruggr/zendesk-mcp-server/compare/v3.1.1...v3.1.2) (2026-10-03)
+
+### Bug Fixes
+
+* **release:** give the bundle SBOM a serial number so the image can be attested ([#348](https://github.com/fruggr/zendesk-mcp-server/issues/348)) ([2695371](https://github.com/fruggr/zendesk-mcp-server/commit/269537137b39d4e39579a17600738a377039c394)), references [#346](https://github.com/fruggr/zendesk-mcp-server/issues/346) [#347](https://github.com/fruggr/zendesk-mcp-server/issues/347) [#340](https://github.com/fruggr/zendesk-mcp-server/issues/340)
+
 ## [3.1.1](https://github.com/fruggr/zendesk-mcp-server/compare/v3.1.0...v3.1.1) (2026-10-03)
 
 ### Bug Fixes
