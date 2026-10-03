@@ -1,5 +1,15 @@
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
+import { createStartupError, errnoCode, STARTUP_DOCS } from '../../utils/startup-error';
 
 /**
  * The key-value contract the authorization server stores its sealed records in.
@@ -55,10 +65,12 @@ const load = (path: string): Map<string, StoredEntry> => {
     // Stryker disable next-line StringLiteral: JSON.parse decodes a Buffer as UTF-8 all the same.
     raw = readFileSync(path, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
-    throw new Error(`Cannot read the OAuth store file (${(err as NodeJS.ErrnoException).code}).`, {
-      cause: err,
-    });
+    if (errnoCode(err) === 'ENOENT') return new Map();
+    throw createStartupError(
+      `Cannot read the OAuth store file (${errnoCode(err)}).`,
+      STARTUP_DOCS.secretAndStore,
+      err,
+    );
   }
   // A corrupt file is an operator problem, not an empty store: silently starting
   // empty would log every user out with no trace of why.
@@ -87,12 +99,42 @@ const persist = (path: string, entries: Map<string, StoredEntry>): void => {
   renameSync(tmp, path);
 };
 
+// The first write creates missing directories, so only the nearest existing one
+// must be writable. Checked at startup: a read-only filesystem stops the server
+// rather than failing the first user's sign-in.
+const assertWritable = (path: string): void => {
+  let dir = dirname(path);
+  try {
+    for (;;) {
+      try {
+        if (!statSync(dir).isDirectory()) {
+          throw Object.assign(new Error(`${dir} is not a directory`), { code: 'ENOTDIR' });
+        }
+        break;
+      } catch (err) {
+        // Stryker disable next-line ConditionalExpression: the filesystem root always exists, so the climb never reaches it on ENOENT.
+        if (errnoCode(err) !== 'ENOENT' || dirname(dir) === dir) throw err;
+        dir = dirname(dir);
+      }
+    }
+    accessSync(dir, constants.W_OK);
+  } catch (err) {
+    throw createStartupError(
+      `Cannot write the OAuth store at ${path} (${errnoCode(err)}). Point OAUTH_STORE ` +
+        '(or --oauth-store) at a writable directory, such as a mounted volume.',
+      STARTUP_DOCS.secretAndStore,
+      err,
+    );
+  }
+};
+
 /**
  * The default store: one JSON file, written atomically on every change. Chosen
  * over `keyv-file`, whose plain `writeFile` can truncate the file on a crash and
  * whose loader then silently starts empty. Single process only (ADR, Storage).
  */
 export const createFileStore = (path: string): RecordStore => {
+  assertWritable(path);
   const entries = load(path);
   return createMemoryStore(entries, () => persist(path, entries));
 };

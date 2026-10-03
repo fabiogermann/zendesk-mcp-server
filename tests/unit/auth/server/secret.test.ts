@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MASTER_SECRET_FILE_NAME, resolveMasterSecret } from '../../../../src/auth/server/secret';
 import type { Logger } from '../../../../src/utils/logger';
+import { isStartupError, STARTUP_DOCS } from '../../../../src/utils/startup-error';
 
 const VALID = Buffer.alloc(32, 9).toString('base64');
 const SHORT = Buffer.alloc(16, 9).toString('base64');
@@ -74,6 +75,35 @@ describe('resolveMasterSecret', () => {
     );
   });
 
+  it('reports a malformed or missing secret as a startup error linking the docs', () => {
+    const thrown = (input: Parameters<typeof resolveMasterSecret>[0]): unknown => {
+      try {
+        resolveMasterSecret(input);
+      } catch (err) {
+        return err;
+      }
+      return undefined;
+    };
+    const short = thrown({ value: SHORT, configDir: dir, storeUri: storeElsewhere() });
+    expect(isStartupError(short)).toBe(true);
+    expect(short).toMatchObject({
+      message:
+        'OAuth master secret must decode to at least 32 bytes of base64 ' +
+        `(generate one with: openssl rand -base64 32). See ${STARTUP_DOCS.secretAndStore}`,
+      cause: { message: expect.stringContaining('at least 32 bytes') },
+    });
+    const missing = thrown({
+      file: join(dir, 'absent'),
+      configDir: dir,
+      storeUri: storeElsewhere(),
+    });
+    expect(isStartupError(missing)).toBe(true);
+    expect(missing).toHaveProperty(
+      'message',
+      `The OAuth master secret file is missing or empty. See ${STARTUP_DOCS.secretAndStore}`,
+    );
+  });
+
   it('generates, persists with owner-only permissions, and reuses the secret on the next start', () => {
     const { logger, events } = recordingLogger();
     const first = resolveMasterSecret({ configDir: dir, storeUri: storeElsewhere() }, logger);
@@ -129,8 +159,50 @@ describe('resolveMasterSecret', () => {
       error = err;
     }
     expect(error).toMatchObject({
-      message: 'Cannot read the OAuth master secret file (EISDIR).',
+      message: `Cannot read the OAuth master secret file (EISDIR). See ${STARTUP_DOCS.secretAndStore}`,
       cause: { code: 'EISDIR' },
+    });
+    expect(isStartupError(error)).toBe(true);
+  });
+
+  it('names ENOTDIR for a --oauth-master-secret-file path under a regular file', () => {
+    const blocker = join(dir, 'not-a-dir');
+    writeFileSync(blocker, '');
+    let error: unknown;
+    try {
+      resolveMasterSecret({
+        file: join(blocker, 'secret'),
+        configDir: dir,
+        storeUri: storeElsewhere(),
+      });
+    } catch (err) {
+      error = err;
+    }
+    expect(isStartupError(error)).toBe(true);
+    expect(error).toMatchObject({
+      message: `Cannot read the OAuth master secret file (ENOTDIR). See ${STARTUP_DOCS.secretAndStore}`,
+      cause: { code: 'ENOTDIR' },
+    });
+  });
+
+  it('stops with a startup error when the generated secret cannot be written', () => {
+    // A regular file where the config dir should be: mkdir fails the same way
+    // for root and non-root, unlike a chmod-based read-only directory.
+    const blocker = join(dir, 'not-a-dir');
+    writeFileSync(blocker, '');
+    const configDir = join(blocker, 'config');
+    let error: unknown;
+    try {
+      resolveMasterSecret({ configDir, storeUri: storeElsewhere() });
+    } catch (err) {
+      error = err;
+    }
+    expect(isStartupError(error)).toBe(true);
+    expect(error).toMatchObject({
+      message:
+        `Cannot write the generated OAuth master secret to ${join(configDir, MASTER_SECRET_FILE_NAME)} (ENOTDIR). ` +
+        `Set OAUTH_MASTER_SECRET or OAUTH_MASTER_SECRET_FILE from a secret manager instead. See ${STARTUP_DOCS.secretAndStore}`,
+      cause: { code: 'ENOTDIR' },
     });
   });
 

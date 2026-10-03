@@ -4,22 +4,26 @@
 import 'zod/compile';
 
 import type { McpServer } from '@modelcontextprotocol/server';
-import { createTokenStore } from './auth/token-store';
 import type { Config } from './config';
 import { loadConfig } from './config';
 import { startDevServer } from './dev/reload';
 import { renderToolSurface } from './routing/print';
 import { createMcpServer } from './server';
 import { createAllTools } from './tools/index';
-import { loadHttpTransport } from './transports/http-peers';
 import { startStdioTransport } from './transports/stdio';
 import { createLogger, type Logger } from './utils/logger';
 import { installShutdown } from './utils/shutdown';
+import { isStartupError } from './utils/startup-error';
+
+type StdioTokenStore = ReturnType<typeof import('./auth/token-store').createTokenStore>;
 
 // OAuth mode — browser-based auth on first tool call. `invalidate` drops the
 // dead access token on a 401 so the next call refreshes/re-authenticates.
-const buildStdioTokenStore = (config: Config, logger: Logger) =>
-  createTokenStore(
+// Loaded on demand: the browser sign-in (and its `open` dependency) is stdio's
+// alone, so an HTTP server never loads it.
+const buildStdioTokenStore = async (config: Config, logger: Logger): Promise<StdioTokenStore> => {
+  const { createTokenStore } = await import('./auth/token-store');
+  return createTokenStore(
     {
       subdomain: config.subdomain,
       oauthClientId: config.oauthClientId,
@@ -28,13 +32,14 @@ const buildStdioTokenStore = (config: Config, logger: Logger) =>
     },
     logger,
   );
+};
 
 // Both stdio paths end with a server already connected to its transport; dev
 // mode wires `reload_tools` and connects on its own. Returning the server is
 // what lets the caller close it on shutdown.
 const connectStdio = async (
   config: Config,
-  tokenStore: ReturnType<typeof buildStdioTokenStore>,
+  tokenStore: StdioTokenStore,
   logger: Logger,
 ): Promise<McpServer> => {
   if (config.dev) {
@@ -61,7 +66,7 @@ const main = async (): Promise<void> => {
   const logger = createLogger(config.logLevel);
 
   if (config.transport === 'stdio') {
-    const tokenStore = buildStdioTokenStore(config, logger);
+    const tokenStore = await buildStdioTokenStore(config, logger);
     const server = await connectStdio(config, tokenStore, logger);
 
     // Installed *after* the transport is connected: the SDK's stdin `data`
@@ -83,9 +88,9 @@ const main = async (): Promise<void> => {
     logger.warn('dev_mode_ignored_http');
   }
 
-  // HTTP mode: loaded on demand, because its packages are optional peers that
-  // a stdio install lacks.
-  const { startHttpTransport } = await loadHttpTransport();
+  // Loaded on demand: the authorization server is HTTP's alone, so a stdio
+  // start never parses it.
+  const { startHttpTransport } = await import('./transports/http');
   const http = await startHttpTransport(config, logger);
 
   // Signals only: an HTTP server has no client on stdin to lose. Nothing reads
@@ -95,6 +100,9 @@ const main = async (): Promise<void> => {
 };
 
 main().catch((error) => {
-  console.error('Fatal error:', error);
+  // A misconfiguration the operator fixes: its message says how, and a stack
+  // trace would only bury it.
+  if (isStartupError(error)) console.error(error.message);
+  else console.error('Fatal error:', error);
   process.exit(1);
 });

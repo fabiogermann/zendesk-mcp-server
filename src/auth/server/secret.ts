@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'n
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Logger, silentLogger } from '../../utils/logger';
+import { createStartupError, errnoCode, STARTUP_DOCS } from '../../utils/startup-error';
 import { MIN_SECRET_BYTES, parseSecretList } from './keys';
 
 export const MASTER_SECRET_FILE_NAME = 'oauth-master-secret';
@@ -26,25 +27,42 @@ export interface MasterSecret {
 }
 
 const isWindows = process.platform === 'win32';
+// The persisted secret's directory may sit under a file (a read-only or odd
+// config dir): that is "not generated yet", and the write that follows reports
+// it. A path the operator gave keeps its real error.
+const ABSENT_PERSISTED = new Set(['ENOENT', 'ENOTDIR']);
+const ABSENT_GIVEN = new Set(['ENOENT']);
 
-const readSecretFile = (path: string): string | undefined => {
+const readSecretFile = (path: string, absent: ReadonlySet<string>): string | undefined => {
   try {
     return readFileSync(path, 'utf8').trim() || undefined;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new Error(
-      `Cannot read the OAuth master secret file (${(err as NodeJS.ErrnoException).code}).`,
-      { cause: err },
+    if (absent.has(errnoCode(err))) return undefined;
+    throw createStartupError(
+      `Cannot read the OAuth master secret file (${errnoCode(err)}).`,
+      STARTUP_DOCS.secretAndStore,
+      err,
     );
   }
 };
 
+// A read-only root filesystem (a hardened container) lands here when no secret
+// was supplied: the fix is to supply one, which the message says.
 const writeSecretFile = (path: string, value: string): void => {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${value}\n`, { mode: 0o600 });
-  if (!isWindows) chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${value}\n`, { mode: 0o600 });
+    if (!isWindows) chmodSync(tmp, 0o600);
+    renameSync(tmp, path);
+  } catch (err) {
+    throw createStartupError(
+      `Cannot write the generated OAuth master secret to ${path} (${errnoCode(err)}). ` +
+        'Set OAUTH_MASTER_SECRET or OAUTH_MASTER_SECRET_FILE from a secret manager instead.',
+      STARTUP_DOCS.secretAndStore,
+      err,
+    );
+  }
 };
 
 const storeDirectory = (storeUri: string): string | undefined =>
@@ -61,14 +79,23 @@ export const resolveMasterSecret = (
   logger: Logger = silentLogger,
 ): MasterSecret => {
   const validated = (value: string, source: MasterSecretSource): MasterSecret => {
-    parseSecretList(value);
+    try {
+      parseSecretList(value);
+    } catch (err) {
+      throw createStartupError((err as Error).message, STARTUP_DOCS.secretAndStore, err);
+    }
     return { value, source };
   };
 
   if (input.value) return validated(input.value, 'env');
   if (input.file) {
-    const fromFlag = readSecretFile(input.file);
-    if (!fromFlag) throw new Error('The OAuth master secret file is missing or empty.');
+    const fromFlag = readSecretFile(input.file, ABSENT_GIVEN);
+    if (!fromFlag) {
+      throw createStartupError(
+        'The OAuth master secret file is missing or empty.',
+        STARTUP_DOCS.secretAndStore,
+      );
+    }
     return validated(fromFlag, 'file-flag');
   }
 
@@ -81,7 +108,7 @@ export const resolveMasterSecret = (
   }
 
   const path = join(input.configDir, MASTER_SECRET_FILE_NAME);
-  const persisted = readSecretFile(path);
+  const persisted = readSecretFile(path, ABSENT_PERSISTED);
   const secret = persisted ? validated(persisted, 'persisted') : undefined;
   const result = secret ?? { value: generate(), source: 'generated' as const };
   if (!secret) {

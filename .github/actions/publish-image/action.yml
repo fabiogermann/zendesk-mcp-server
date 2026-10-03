@@ -1,0 +1,159 @@
+name: Publish the container image
+description: >-
+  Build the image from the checked-out tree, smoke-test it, push it to ghcr.io
+  by digest, sign it (cosign keyless) and attach provenance and SBOM
+  attestations, and only then point its version tags at it. Shared by the release job and the base-image republish,
+  so both publish exactly the same way. The caller needs packages: write,
+  id-token: write and attestations: write.
+
+inputs:
+  version:
+    description: The release version (X.Y.Z) the image carries.
+    required: true
+  context:
+    description: Directory to build from (the release's tree); tooling is read from the workspace.
+    default: .
+  dhi-username:
+    description: Docker ID allowed to pull from dhi.io.
+    required: true
+  dhi-token:
+    description: Read-only Docker access token for dhi.io.
+    required: true
+  github-token:
+    description: Token that can push to ghcr.io (the job's GITHUB_TOKEN).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v4
+
+    - uses: docker/login-action@v4
+      with:
+        registry: dhi.io
+        username: ${{ inputs.dhi-username }}
+        password: ${{ inputs.dhi-token }}
+
+    - uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github-token }}
+
+    - uses: actions/setup-node@v7
+      with:
+        node-version-file: .nvmrc
+
+    - name: Compute the image tags
+      id: tags
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        image=ghcr.io/fruggr/zendesk-mcp-server
+        IFS=. read -r major minor _ <<< "$VERSION"
+        {
+          echo "image=$image"
+          echo "list<<EOF"
+          printf '%s\n' "$image:$VERSION" "$image:$major.$minor" "$image:$major" "$image:latest"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    # The runtime stage's FROM (the last one), recorded as image labels.
+    - name: Read the runtime base image
+      id: base
+      shell: bash
+      env:
+        CONTEXT: ${{ inputs.context }}
+      run: |
+        set -euo pipefail
+        ref=$(grep -E '^FROM ' "$CONTEXT/Dockerfile" | tail -1 | awk '{print $2}')
+        echo "name=${ref%@*}" >> "$GITHUB_OUTPUT"
+        echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
+
+    # Built and tested locally first: a failing image never reaches the registry.
+    - name: Build
+      uses: docker/build-push-action@v7
+      with:
+        context: ${{ inputs.context }}
+        platforms: linux/amd64
+        build-args: |
+          VERSION=${{ inputs.version }}
+          BASE_NAME=${{ steps.base.outputs.name }}
+          BASE_DIGEST=${{ steps.base.outputs.digest }}
+        load: true
+        tags: zendesk-mcp-server:candidate
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Smoke-test the candidate
+      shell: bash
+      run: node "$GITHUB_WORKSPACE/scripts/container-smoke.mjs" zendesk-mcp-server:candidate
+
+    # Untagged: the version tags move only once the digest is signed and
+    # attested, so a failed run leaves them on the last verified image, and the
+    # stale base it still carries makes release.yml's republish retry.
+    - name: Push by digest
+      id: push
+      uses: docker/build-push-action@v7
+      with:
+        context: ${{ inputs.context }}
+        platforms: linux/amd64
+        build-args: |
+          VERSION=${{ inputs.version }}
+          BASE_NAME=${{ steps.base.outputs.name }}
+          BASE_DIGEST=${{ steps.base.outputs.digest }}
+        outputs: type=image,name=${{ steps.tags.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+        provenance: mode=max
+        sbom: true
+        cache-from: type=gha
+
+    - uses: sigstore/cosign-installer@v4
+
+    - name: Sign (cosign keyless)
+      shell: bash
+      env:
+        REF: ${{ steps.tags.outputs.image }}@${{ steps.push.outputs.digest }}
+      run: cosign sign --yes "$REF"
+
+    # The bundle inlines its dependencies, so a scanner reading the image finds
+    # none of them: the SBOM the build wrote from the bundled modules is the one
+    # that lists them.
+    - name: Extract the bundle SBOM
+      shell: bash
+      env:
+        REF: ${{ steps.tags.outputs.image }}@${{ steps.push.outputs.digest }}
+      run: |
+        set -euo pipefail
+        id=$(docker create "$REF")
+        docker cp "$id:/app/dist/sbom.cdx.json" sbom.cdx.json
+        docker rm "$id" > /dev/null
+
+    - name: Attest build provenance
+      uses: actions/attest@v4
+      with:
+        subject-name: ${{ steps.tags.outputs.image }}
+        subject-digest: ${{ steps.push.outputs.digest }}
+        push-to-registry: true
+
+    - name: Attest the bundle SBOM
+      uses: actions/attest@v4
+      with:
+        subject-name: ${{ steps.tags.outputs.image }}
+        subject-digest: ${{ steps.push.outputs.digest }}
+        sbom-path: sbom.cdx.json
+        push-to-registry: true
+
+    # imagetools copies the signed index as is, so every tag resolves to the
+    # digest the signature and attestations name.
+    - name: Point the version tags at the signed digest
+      shell: bash
+      env:
+        REF: ${{ steps.tags.outputs.image }}@${{ steps.push.outputs.digest }}
+        TAGS: ${{ steps.tags.outputs.list }}
+      run: |
+        set -euo pipefail
+        args=()
+        while read -r tag; do [[ -n "$tag" ]] && args+=(--tag "$tag"); done <<< "$TAGS"
+        docker buildx imagetools create "${args[@]}" "$REF"

@@ -10,6 +10,8 @@ export default defineConfig({
     // unpacked tarball), which runs every suite twice over against mutated
     // sources.
     include: ['tests/**/*.test.ts'],
+    // Runs the built bundle: `pnpm test:bundle` (vitest.bundle.config.ts).
+    exclude: ['tests/bundle/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'html', 'lcov', 'json-summary'],
