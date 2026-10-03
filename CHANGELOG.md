@@ -1,3 +1,9 @@
+## [3.1.1](https://github.com/fruggr/zendesk-mcp-server/compare/v3.1.0...v3.1.1) (2026-10-03)
+
+### Bug Fixes
+
+* **release:** pin cosign-installer to a real tag and wait longer for npm ([#347](https://github.com/fruggr/zendesk-mcp-server/issues/347)) ([aeb304d](https://github.com/fruggr/zendesk-mcp-server/commit/aeb304de76aed91e57ed98406599781b4e3f06c0)), references [#346](https://github.com/fruggr/zendesk-mcp-server/issues/346) [#340](https://github.com/fruggr/zendesk-mcp-server/issues/340)
+
 ## [3.1.0](https://github.com/fruggr/zendesk-mcp-server/compare/v3.0.3...v3.1.0) (2026-10-03)
 
 ### Features
