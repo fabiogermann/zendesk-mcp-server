@@ -1,3 +1,9 @@
+## [3.1.0](https://github.com/fruggr/zendesk-mcp-server/compare/v3.0.3...v3.1.0) (2026-10-03)
+
+### Features
+
+* publish a HTTP container image ([#346](https://github.com/fruggr/zendesk-mcp-server/issues/346)) ([0059a17](https://github.com/fruggr/zendesk-mcp-server/commit/0059a179e1ef5a1815a8b097428cc8d3515b7220)), closes [#340](https://github.com/fruggr/zendesk-mcp-server/issues/340), references [#344](https://github.com/fruggr/zendesk-mcp-server/issues/344) [#345](https://github.com/fruggr/zendesk-mcp-server/issues/345)
+
 ## [3.0.3](https://github.com/fruggr/zendesk-mcp-server/compare/v3.0.2...v3.0.3) (2026-10-03)
 
 ### Bug Fixes
