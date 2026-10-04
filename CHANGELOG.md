@@ -1,3 +1,21 @@
+## [3.2.0](https://github.com/fruggr/zendesk-mcp-server/compare/v3.1.2...v3.2.0) (2026-10-04)
+
+### Features
+
+* **http:** serve a CIMD document's last good copy when its host fails ([#351](https://github.com/fruggr/zendesk-mcp-server/issues/351)) ([75ce561](https://github.com/fruggr/zendesk-mcp-server/commit/75ce561e9e5c403fb5181e0d84efa9b510ecebeb)), closes [#316](https://github.com/fruggr/zendesk-mcp-server/issues/316), references [anthropics/claude-code#84263](https://github.com/anthropics/claude-code/issues/84263) [cloudflare/workers-oauth-provider#333](https://github.com/cloudflare/workers-oauth-provider/issues/333)
+
+<details>
+<summary>🔧 Internal changes (chore, ci, build, refactor, tests, docs…)</summary>
+
+### Chores
+
+* **deps:** update mcp sdk to v2.2.0 ([#350](https://github.com/fruggr/zendesk-mcp-server/issues/350)) ([0549933](https://github.com/fruggr/zendesk-mcp-server/commit/0549933a01efe0662f4ffc526932fecf5f0ecc44))
+
+### Continuous Integration
+
+* **release:** grant artifact-metadata: write to the image jobs ([#349](https://github.com/fruggr/zendesk-mcp-server/issues/349)) ([fd11242](https://github.com/fruggr/zendesk-mcp-server/commit/fd11242d8e1066352b262bc2f02db4d2c5bde5d4)), references [#346](https://github.com/fruggr/zendesk-mcp-server/issues/346) [#340](https://github.com/fruggr/zendesk-mcp-server/issues/340)
+</details>
+
 ## [3.1.2](https://github.com/fruggr/zendesk-mcp-server/compare/v3.1.1...v3.1.2) (2026-10-03)
 
 ### Bug Fixes
