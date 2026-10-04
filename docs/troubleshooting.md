@@ -205,6 +205,48 @@ successful write would bring it back, with its refresh token. Fix the store
 first (disk space, permissions on its directory), then restart. Any successful
 write persists the removal, since the store rewrites its whole file.
 
+## HTTP: the log shows `oauth_client_fetch_failed`
+
+The server could not fetch a client's metadata document: the URL that serves as
+its `client_id` (for Claude Code,
+`https://claude.ai/oauth/claude-code-client-metadata`). The server fetches that
+document at every sign-in and every token refresh, at most every few minutes per
+client, and cannot accept the client without it. The client's users then see
+`invalid_client` when they sign in, or when they refresh, which signs them out.
+
+- **`fallback: last_good`**: the server served the last copy it kept, `ageS`
+  seconds old, and users notice nothing. A copy is kept in the grant store once
+  a user of that client has signed in or refreshed, and lasts 7 days after the
+  last time it was kept.
+- **`fallback: none`**: no copy to serve. No user of that client has signed in
+  or refreshed in the last 7 days, or since a restart with a `memory://` store.
+
+A `404`, `410`, redirect or other client error from the document host means
+the document moved or was withdrawn: no copy is served, and it is logged at
+`debug` level only.
+
+Usual causes, by `status`:
+
+- **`403`**: the host's bot protection blocks the server's outbound IP. This
+  has been reported for Claude Code and Codex documents fetched from some cloud
+  providers' shared egress IPs. It depends on the IP's reputation, so it can
+  start or stop without any change on your side. It is uncommon: many
+  deployments never see it.
+- **`429`, `5xx` or `error`**: a rate limit, an outage at the host, or a network
+  problem. These are usually short-lived, and the last good copy covers them.
+- **`200` with `error: not a client document`**: the host answered with
+  something other than the document, such as a bot-protection page.
+- **A `url` that is not a `client_id`**: a URL the document names, such as the
+  `jwks_uri` of a client that signs its token requests (ChatGPT). No copy is
+  kept for those, but the client fails the same way, and the remedies are the
+  same.
+
+If `403`s persist, give the server an outbound IP with a clean reputation, such
+as a dedicated egress IP from your host or a NAT gateway with a static IP. It
+has to be a network-level change: an HTTP proxy set through `HTTPS_PROXY` is not
+used for these fetches ([Outbound access](http-deployment.md#outbound-access)).
+A restart does not help, and the last good copy runs out after 7 days.
+
 ## HTTP: the sign-in page says the link expired
 
 The sign-in went through another browser than the one that started it, or took

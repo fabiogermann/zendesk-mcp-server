@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +12,7 @@ import {
   SignJWT,
 } from 'jose';
 import { HttpResponse, http } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deriveKeyRing } from '../../src/auth/server/keys';
 import type { Config } from '../../src/config';
 import { type HttpServerHandle, startHttpTransport } from '../../src/transports/http';
@@ -42,6 +42,17 @@ const CHATGPT_CALLBACK = 'https://chatgpt.com/connector_platform_oauth_redirect'
 const UNKNOWN = 'https://tools.example.com/oauth/client.json';
 
 const chatgptKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
+
+const chatgptAssertion = (audience: string) =>
+  new SignJWT({})
+    .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
+    .setIssuer(CHATGPT)
+    .setSubject(CHATGPT)
+    .setAudience(audience)
+    .setJti(randomUUID())
+    .setIssuedAt()
+    .setExpirationTime('1m')
+    .sign(chatgptKeys.privateKey);
 
 // The documents as fetched on 2026-09-24 (see the #127 plan), served from memory.
 const cimdDocuments = async (): Promise<Record<string, unknown>> => ({
@@ -90,9 +101,12 @@ const cimdDocuments = async (): Promise<Record<string, unknown>> => ({
 });
 
 const cimdRequests: string[] = [];
+// Documents whose host answers 403, as bot protection does to some egress IPs.
+const blockedDocuments = new Set<string>();
 
 const cimdFetch = async (input: string | URL | Request): Promise<Response> => {
   cimdRequests.push(String(input));
+  if (blockedDocuments.has(String(input))) return new Response('blocked', { status: 403 });
   const doc = (await cimdDocuments())[String(input)];
   return doc ? Response.json(doc) : new Response('not found', { status: 404 });
 };
@@ -136,6 +150,7 @@ describe('HTTP authorization server', () => {
   afterEach(async () => {
     await handle?.close();
     handle = undefined;
+    blockedDocuments.clear();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -337,15 +352,7 @@ describe('HTTP authorization server', () => {
       await start();
       const result = await authorize(base, { clientId: CHATGPT, redirectUri: CHATGPT_CALLBACK });
       expect(result.consentShown).toBe(false);
-      const assertion = await new SignJWT({})
-        .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
-        .setIssuer(CHATGPT)
-        .setSubject(CHATGPT)
-        .setAudience(base)
-        .setJti(randomUUID())
-        .setIssuedAt()
-        .setExpirationTime('1m')
-        .sign(chatgptKeys.privateKey);
+      const assertion = await chatgptAssertion(base);
       const tokens = await tokenRequest(base, {
         grant_type: 'authorization_code',
         client_id: CHATGPT,
@@ -803,6 +810,12 @@ describe('HTTP authorization server', () => {
 
   describe('persistence and keys', () => {
     const fileStore = () => pathToFileURL(join(dir, 'store', 'oauth-store.json')).href;
+    const storedKeys = (): string[] => {
+      const path = join(dir, 'store', 'oauth-store.json');
+      return existsSync(path) ? Object.keys(JSON.parse(readFileSync(path, 'utf8'))) : [];
+    };
+    const cimdKey = (clientId: string) =>
+      `CimdDocument:${createHash('sha256').update(clientId).digest('base64url')}`;
 
     it('keeps users signed in across a restart with a file store and the same secret', async () => {
       await start({ oauthStore: fileStore() });
@@ -812,6 +825,91 @@ describe('HTTP authorization server', () => {
       const next = await refresh(base, clientId, tokens.body.refresh_token ?? '');
       expect(next.status).toBe(200);
       expect((await callMcp(base, next.body.access_token)).status).toBe(200);
+    });
+
+    it('refreshes on the last good copy when the document host blocks a restarted server', async () => {
+      await start({ oauthStore: fileStore() });
+      const result = await authorize(base, { clientId: CLAUDE, redirectUri: CLAUDE_CALLBACK });
+      const tokens = await exchangeCode(base, CLAUDE, CLAUDE_CALLBACK, result);
+      // Kept after the token is issued, off the request path.
+      await vi.waitFor(() => expect(storedKeys()).toContain(cimdKey(CLAUDE)));
+      await restart({ oauthStore: fileStore() });
+      blockedDocuments.add(CLAUDE);
+      cimdRequests.length = 0;
+      const next = await refresh(base, CLAUDE, tokens.body.refresh_token ?? '');
+      expect(next.status).toBe(200);
+      expect(cimdRequests).toContain(CLAUDE);
+      expect((await callMcp(base, next.body.access_token)).status).toBe(200);
+    });
+
+    it('refreshes Claude Code and ChatGPT on their last good copies too', async () => {
+      await start({ oauthStore: fileStore() });
+      const loopback = 'http://127.0.0.1:53123/callback';
+      const code = await authorize(base, { clientId: CLAUDE_CODE, redirectUri: loopback });
+      const codeTokens = await exchangeCode(base, CLAUDE_CODE, loopback, code);
+      const gpt = await authorize(base, { clientId: CHATGPT, redirectUri: CHATGPT_CALLBACK });
+      const gptTokens = await tokenRequest(base, {
+        grant_type: 'authorization_code',
+        client_id: CHATGPT,
+        code: gpt.code ?? '',
+        redirect_uri: CHATGPT_CALLBACK,
+        code_verifier: gpt.verifier,
+        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        client_assertion: await chatgptAssertion(base),
+      });
+      await vi.waitFor(() =>
+        expect(storedKeys()).toEqual(
+          expect.arrayContaining([cimdKey(CLAUDE_CODE), cimdKey(CHATGPT)]),
+        ),
+      );
+      await restart({ oauthStore: fileStore() });
+      blockedDocuments.add(CLAUDE_CODE);
+      blockedDocuments.add(CHATGPT);
+      const codeNext = await refresh(base, CLAUDE_CODE, codeTokens.body.refresh_token ?? '');
+      expect(codeNext.status).toBe(200);
+      const gptNext = await tokenRequest(base, {
+        grant_type: 'refresh_token',
+        client_id: CHATGPT,
+        refresh_token: gptTokens.body.refresh_token ?? '',
+        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        client_assertion: await chatgptAssertion(base),
+      });
+      expect(gptNext.status).toBe(200);
+    });
+
+    it('never lets a copy served during an outage renew itself', async () => {
+      await start({ oauthStore: fileStore() });
+      const result = await authorize(base, { clientId: CLAUDE, redirectUri: CLAUDE_CALLBACK });
+      const tokens = await exchangeCode(base, CLAUDE, CLAUDE_CALLBACK, result);
+      await vi.waitFor(() => expect(storedKeys()).toContain(cimdKey(CLAUDE)));
+      const keptRecord = () =>
+        JSON.parse(readFileSync(join(dir, 'store', 'oauth-store.json'), 'utf8'))[cimdKey(CLAUDE)];
+      const before = keptRecord();
+      await restart({ oauthStore: fileStore() });
+      blockedDocuments.add(CLAUDE);
+      expect((await refresh(base, CLAUDE, tokens.body.refresh_token ?? '')).status).toBe(200);
+      // Give a renewal, if any, the time to land.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(keptRecord()).toEqual(before);
+    });
+
+    it('keeps no document for a client that never got a token', async () => {
+      await start({ oauthStore: fileStore() });
+      await authorize(base, {
+        clientId: UNKNOWN,
+        redirectUri: 'https://tools.example.com/callback',
+      });
+      const result = await authorize(base, { clientId: CLAUDE, redirectUri: CLAUDE_CALLBACK });
+      expect(result.code).toEqual(expect.any(String));
+      expect(storedKeys().filter((key) => key.startsWith('CimdDocument:'))).toEqual([]);
+    });
+
+    it('turns a blocked client away when no copy of its document was ever kept', async () => {
+      await start({ oauthStore: fileStore() });
+      blockedDocuments.add(CLAUDE);
+      const result = await authorize(base, { clientId: CLAUDE, redirectUri: CLAUDE_CALLBACK });
+      expect(result.code).toBeUndefined();
+      expect(result.error).toContain('invalid_client');
     });
 
     it('stores no raw token, no Zendesk token and no account id', async () => {
