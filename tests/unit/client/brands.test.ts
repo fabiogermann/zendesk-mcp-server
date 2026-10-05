@@ -137,6 +137,41 @@ describe('createBrandSubdomainResolver', () => {
     await expect(resolve('424242')).rejects.toThrow(/no usable after_cursor/);
   });
 
+  it('evicts a rejected fetch so the next lookup retries with a fresh request', async () => {
+    // A transient 401 must not be cached forever: the first call fails, the
+    // second re-fetches (fresh token) and succeeds, and the third is served
+    // from the cache of that successful fetch. (A 5xx would be replayed by the
+    // client itself, never reaching this cache as a rejection.)
+    let calls = 0;
+    mswServer.use(
+      http.get('https://testsubdomain.zendesk.com/api/v2/brands', () => {
+        calls += 1;
+        if (calls === 1) {
+          return HttpResponse.json({ error: 'expired token' }, { status: 401 });
+        }
+        return HttpResponse.json({
+          brands: [
+            {
+              id: 424242,
+              name: 'Second brand',
+              brand_url: 'https://brand424242.zendesk.com',
+              subdomain: 'brand424242',
+              host_mapping: null,
+              default: false,
+              active: true,
+            },
+          ],
+          meta: { has_more: false, after_cursor: '' },
+        });
+      }),
+    );
+    const resolve = createBrandSubdomainResolver(SUBDOMAIN, () => TOKEN);
+    await expect(resolve('424242')).rejects.toThrow();
+    await expect(resolve('424242')).resolves.toBe('brand424242');
+    await resolve('424242');
+    expect(calls).toBe(2);
+  });
+
   it('throws when after_cursor is identical to the cursor just sent (no progress)', async () => {
     // Cursor-progress guard: the server echoed the same cursor back, so the
     // next request would re-fetch the same page and report duplicate brands.

@@ -422,6 +422,7 @@ const parseCliArgs = (args: string[]): CliResult => {
   if (values['callback-port'] !== undefined) {
     result.callbackPort = parsePort(values['callback-port'], '--callback-port');
   }
+  // Stryker disable next-line ConditionalExpression: assigning `brandIds: undefined` for an absent flag is observably identical — the only read is `cli.brandIds ?? env`, which treats a missing key and undefined the same.
   if (values['brand-ids'] !== undefined) result.brandIds = values['brand-ids'];
 
   return result;
