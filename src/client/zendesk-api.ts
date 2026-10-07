@@ -153,17 +153,18 @@ export const zendeskPut = <T>(
   return executeRequest<T>(url, token, { method: 'PUT', body });
 };
 
-// The five helpCenter* helpers take an optional `brandHost` (last, so existing
-// calls are untouched): set, they hit that brand's Help Center host
-// (https://<brandHost>/api/v2/help_center/...); unset, the account default brand.
+// The five helpCenter* helpers take the EFFECTIVE subdomain: the account's for
+// the default brand, the resolved brand's own subdomain for a brand-scoped
+// call (brands are only ever <subdomain>.zendesk.com — see
+// getHelpCenterBaseUrl). There is deliberately no separate brand-host
+// parameter.
 export const helpCenterGet = <T>(
   subdomain: string,
   token: string,
   path: string,
   params?: Record<string, string>,
-  brandHost?: string,
 ): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandHost), path, params);
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path, params);
   return executeRequest<T>(url, token);
 };
 
@@ -172,9 +173,8 @@ export const helpCenterPost = <T>(
   token: string,
   path: string,
   body: unknown,
-  brandHost?: string,
 ): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandHost), path);
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path);
   return executeRequest<T>(url, token, { method: 'POST', body });
 };
 
@@ -183,19 +183,13 @@ export const helpCenterPut = <T>(
   token: string,
   path: string,
   body: unknown,
-  brandHost?: string,
 ): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandHost), path);
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path);
   return executeRequest<T>(url, token, { method: 'PUT', body });
 };
 
-export const helpCenterDelete = <T>(
-  subdomain: string,
-  token: string,
-  path: string,
-  brandHost?: string,
-): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandHost), path);
+export const helpCenterDelete = <T>(subdomain: string, token: string, path: string): Promise<T> => {
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path);
   return executeRequest<T>(url, token, { method: 'DELETE' });
 };
 
@@ -258,9 +252,8 @@ export const helpCenterUpload = async <T>(
   token: string,
   path: string,
   formData: FormData,
-  brandHost?: string,
 ): Promise<T> => {
-  const url = buildUrl(getHelpCenterBaseUrl(subdomain, brandHost), path);
+  const url = buildUrl(getHelpCenterBaseUrl(subdomain), path);
   const response = await performFetch(
     'POST',
     url,

@@ -1,3 +1,4 @@
+import { type BrandSubdomainResolver, fetchAllBrands } from '../client/brands';
 import { helpCenterGet, ZendeskApiError } from '../client/zendesk-api';
 import {
   ARTICLE_RESOURCES_SCAN_MAX_PAGES,
@@ -22,6 +23,12 @@ export const LIST_PROMOTED_ARTICLES_TOOL = 'list_promoted_articles';
 export interface PromotedArticleRef {
   id: number;
   title: string;
+  /**
+   * Brand the article was listed under (the id-or-subdomain naming the brand
+   * in multi/all mode). Undefined when the server addresses a single Help
+   * Center, whose URIs carry no brand dimension.
+   */
+  brand?: string;
 }
 
 /** Result of a promoted-article scan: the refs, plus whether the cap cut it short. */
@@ -47,15 +54,16 @@ export interface PromotedArticleScan {
  * `/articles` and filter `promoted` client-side, bounded by `maxPages` to keep
  * the scan tractable on a large Help Center. `truncated` signals the cap was hit.
  *
- * Returns the FULL promoted articles so callers that need rich metadata (the
- * `list_promoted_articles` tool) get everything; the resource provider maps these
- * down to lean refs before caching so the per-session cache doesn't retain bodies.
+ * `subdomain` is the EFFECTIVE one — the account's, or the resolved brand's own
+ * (a brand is only ever <subdomain>.zendesk.com). Returns the FULL promoted
+ * articles so callers that need rich metadata (the `list_promoted_articles`
+ * tool) get everything; the resource provider maps these down to lean refs
+ * before caching so the per-session cache doesn't retain bodies.
  */
 export const fetchPromotedArticles = async (
   subdomain: string,
   token: string,
   maxPages: number = ARTICLE_RESOURCES_SCAN_MAX_PAGES,
-  brandHost?: string,
 ): Promise<PromotedArticleScan> => {
   const promoted: ZendeskArticle[] = [];
   let cursor: string | undefined;
@@ -68,7 +76,6 @@ export const fetchPromotedArticles = async (
       token,
       '/articles',
       buildCursorParams(MAX_PAGE_SIZE, cursor),
-      brandHost,
     );
     const articles = response.articles ?? [];
     for (const article of articles) {
@@ -93,22 +100,16 @@ export const fetchPromotedArticles = async (
  * caller's token and render it as Markdown: the shared metadata summary plus the
  * body converted from HTML (rather than a raw HTML dump), capped by the response
  * character limit. Reuses the same formatting as the `get_article` tool.
+ * `subdomain` is the EFFECTIVE one — the account's, or the resolved brand's own.
  */
 export const fetchArticleMarkdown = async (
   subdomain: string,
   token: string,
   id: number,
   locale?: string,
-  brandHost?: string,
 ): Promise<string> => {
   const path = locale ? `/${locale}/articles/${id}` : `/articles/${id}`;
-  const { article } = await helpCenterGet<{ article: ZendeskArticle }>(
-    subdomain,
-    token,
-    path,
-    undefined,
-    brandHost,
-  );
+  const { article } = await helpCenterGet<{ article: ZendeskArticle }>(subdomain, token, path);
   const text = [formatArticleSummary(article), '', htmlToMarkdown(article.body)].join('\n');
   return truncateIfNeeded(
     text,
@@ -119,8 +120,13 @@ export const fetchArticleMarkdown = async (
 export interface ArticleResourcesProvider {
   /** List the promoted articles for the resource template's `list` callback. */
   listPromoted(): Promise<PromotedArticleList>;
-  /** Render one article (any id) as Markdown for a resource read. */
-  readArticle(id: number): Promise<string>;
+  /**
+   * Render one article (any id) as Markdown for a resource read. In multi/all
+   * mode `brand` carries the {brand} slot of the URI — an id or subdomain,
+   * resolved and allow-list-checked exactly like a tool call's brand_id. In
+   * unset/single mode there is no brand dimension and the argument is ignored.
+   */
+  readArticle(id: number, brand?: string): Promise<string>;
 }
 
 /**
@@ -131,12 +137,20 @@ export interface ArticleResourcesProvider {
  * module scope — in HTTP mode a shared one would leak a caller's data to
  * another. `getToken` resolves lazily, so connecting never triggers the OAuth
  * flow, and a 401 notifies `onUnauthorized` to drop the stale token.
+ *
+ * Branding is resolved through the SHARED brand subdomain resolver, never a
+ * second /brands walk: `brandIds` decides which brands `listPromoted` scans
+ * (all of them in multi mode, so every allowed brand's promoted articles are
+ * listed with their own URIs; 'all' scans every brand of the account), and
+ * `readArticle` resolves the URI's {brand} through the same allow-list +
+ * resolver the tools use.
  */
 export const createArticleResourcesProvider = (
   getToken: () => string | Promise<string>,
   subdomain: string,
   onUnauthorized?: () => void,
-  resolveBrandHost: () => Promise<string | undefined> = () => Promise.resolve(undefined),
+  resolveBrandSubdomain: BrandSubdomainResolver = () => Promise.resolve(subdomain),
+  brandIds?: string[],
 ): ArticleResourcesProvider => {
   let cached: { at: number; promise: Promise<PromotedArticleList> } | undefined;
 
@@ -146,22 +160,62 @@ export const createArticleResourcesProvider = (
     }
   };
 
+  // The brands whose promoted articles the list callback scans, named as the
+  // URIs name them: in multi mode the allow-list entries themselves; in 'all'
+  // mode every brand of the account (listed fresh — the same uncached walk
+  // list_brands uses — so the URIs can carry each brand's subdomain); in
+  // unset/single mode a single undefined entry — one Help Center, no brand
+  // dimension.
+  const listBrands = async (): Promise<(string | undefined)[]> => {
+    if (brandIds === undefined || (brandIds.length === 1 && brandIds[0] !== 'all')) {
+      return [undefined];
+    }
+    if (brandIds[0] === 'all') {
+      const all = await fetchAllBrands(subdomain, await getToken());
+      return all.map((b) => b.subdomain);
+    }
+    return brandIds;
+  };
+
+  // Resolve the effective Help Center subdomain for one listed/allowed brand
+  // entry. Undefined = the account default brand.
+  const effectiveSubdomain = async (brand: string | undefined): Promise<string> => {
+    if (brand === undefined) return subdomain;
+    return resolveBrandSubdomain(brand);
+  };
+
   return {
     listPromoted() {
       const now = Date.now();
       if (cached && now - cached.at < ARTICLE_RESOURCES_TTL_MS) return cached.promise;
 
       const promise = (async () => {
-        const [token, brandHost] = await Promise.all([getToken(), resolveBrandHost()]);
-        const { articles, truncated } = await fetchPromotedArticles(
-          subdomain,
-          token,
-          ARTICLE_RESOURCES_SCAN_MAX_PAGES,
-          brandHost,
-        );
-        // Map to lean refs before caching so the per-session cache holds only the
-        // id + title, never the full article bodies from the scan.
-        return { refs: articles.map((a) => ({ id: a.id, title: a.title })), truncated };
+        const token = await getToken();
+        const brands = await listBrands();
+        // One bounded scan per brand (sequential: each page is already a
+        // request, and fanning brands out in parallel would multiply the burst
+        // against the same rate-limited account).
+        const refs: PromotedArticleRef[] = [];
+        let truncated = false;
+        for (const brand of brands) {
+          const hcSubdomain = await effectiveSubdomain(brand);
+          const scan = await fetchPromotedArticles(
+            hcSubdomain,
+            token,
+            ARTICLE_RESOURCES_SCAN_MAX_PAGES,
+          );
+          truncated = truncated || scan.truncated;
+          // Map to lean refs before caching so the per-session cache holds only
+          // the id + title (+ brand), never the full article bodies.
+          for (const a of scan.articles) {
+            refs.push(
+              brand === undefined
+                ? { id: a.id, title: a.title }
+                : { id: a.id, title: a.title, brand },
+            );
+          }
+        }
+        return { refs, truncated };
       })().catch((err: unknown) => {
         cached = undefined;
         notifyIfUnauthorized(err);
@@ -172,10 +226,10 @@ export const createArticleResourcesProvider = (
       return promise;
     },
 
-    async readArticle(id) {
+    async readArticle(id, brand) {
       try {
-        const [token, brandHost] = await Promise.all([getToken(), resolveBrandHost()]);
-        return await fetchArticleMarkdown(subdomain, token, id, undefined, brandHost);
+        const [token, hcSubdomain] = await Promise.all([getToken(), effectiveSubdomain(brand)]);
+        return await fetchArticleMarkdown(hcSubdomain, token, id, undefined);
       } catch (err) {
         notifyIfUnauthorized(err);
         throw err;

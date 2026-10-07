@@ -145,6 +145,19 @@ describe('loadConfig', () => {
     );
   });
 
+  it('lowercases subdomain entries, so a capitalised one matches its brand', () => {
+    // Zendesk subdomains are lowercase by construction and the resolver matches
+    // case-insensitively, but everything downstream (list_brands filtering, the
+    // allow-list short-circuit) compares strings exactly — normalise at parse
+    // time so 'Support' and 'support' are the same entry everywhere.
+    expect(loadConfig(['mycompany', '--brand-ids', 'Support,DOCS']).brandIds).toEqual([
+      'support',
+      'docs',
+    ]);
+    // Ids are digit strings: lowercasing is a no-op on them.
+    expect(loadConfig(['mycompany', '--brand-ids', '123456']).brandIds).toEqual(['123456']);
+  });
+
   it('de-duplicates entries after trim, so A,A collapses to a single-brand lock', () => {
     // 'A,A' names ONE brand twice; without collapsing, two entries would mean
     // multi mode (list_brands exposed, per-call brand_id required) for a single

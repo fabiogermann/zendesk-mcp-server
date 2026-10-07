@@ -259,11 +259,17 @@ Entries are brand ids or brand subdomains (display names can contain commas
 and change; a subdomain is unique and is what the brand host is built from),
 comma-separated, or the special value `all` for every brand of the account.
 Also `--brand-ids`. Brand ids come from the `list_brands` tool or the Zendesk
-Brands API. Tickets, users and search are account-wide and unaffected.
+Brands API. Tickets, users and search are account-wide and unaffected. Name
+each brand once, by id or by subdomain — the same brand twice (once by id,
+once by subdomain) reads as two entries and turns the server into multi-brand
+mode (per-call `brand_id` required). Subdomain entries are matched
+case-insensitively (`Support` resolves the `support` brand).
 
 Zendesk addresses brands by host: the server resolves each entry to its brand
 (lazily, on first use — startup validates the format only) and calls
 `<brand.subdomain>.zendesk.com` under the standard `/api/v2/help_center` path.
+The resolved brand list is cached briefly (5 minutes), so a brand added after
+startup resolves on its own — no restart needed.
 
 The value shapes the tool surface:
 

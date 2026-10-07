@@ -22,6 +22,7 @@ import {
 } from './routing/proxy-schema';
 import { filterTools, groupByNamespace, NAMESPACE_LABELS } from './routing/registry';
 import type { ToolAnnotations, ToolResult } from './tools/definitions';
+import { resolveBrand } from './tools/help-center';
 import { createAllTools, type ToolDefinition } from './tools/index';
 import { type Logger, silentLogger } from './utils/logger';
 import { readPackageInfo } from './utils/package-info';
@@ -197,24 +198,39 @@ export interface ToolsetParams {
 }
 
 /**
- * Lazily resolve the Help Center host the topology/article resources pin to:
- * the FIRST allowed brand when a list is set (named in the header), else the
- * account default. Uses the SHARED resolver so the topology and article
+ * Lazily resolve the Help Center subdomain the topology resource pins to: the
+ * FIRST allowed brand when a list is set (named in the header), else undefined
+ * (the account default). Uses the SHARED resolver so the topology and article
  * resources hit the same cached brand list the tools use; it only fires when a
- * brand list is set. Providers await it per read (cheap after the first),
- * since registerToolset is synchronous and cannot resolve the host up front.
+ * brand list is set. Providers await it per read (cheap after the first), since
+ * registerToolset is synchronous and cannot resolve up front.
  */
-const firstBrandHostResolver = (
+const firstBrandSubdomainResolver = (
   config: Config,
   resolveBrandSubdomain: (idOrSubdomain: string) => Promise<string>,
 ): (() => Promise<string | undefined>) => {
   const first = config.brandIds?.[0];
   if (first === undefined || first === 'all') return () => Promise.resolve(undefined);
-  return async () => {
-    const sub = await resolveBrandSubdomain(first);
-    return `${sub}.zendesk.com`;
-  };
+  return () => resolveBrandSubdomain(first);
 };
+
+/**
+ * Per-call brand guard for the article resource URIs in multi/all mode: the
+ * {brand} slot of `<scheme>://brands/{brand}/articles/{id}` is resolved and
+ * allow-list-checked EXACTLY like a tool call's `brand_id` (shared resolver,
+ * same resolveBrand rules), returning the brand's subdomain for the Help
+ * Center fetch. Unset/single modes never reach here — their URIs carry no
+ * brand segment.
+ */
+const resourceBrandResolver =
+  (
+    config: Config,
+    resolveBrandSubdomain: (idOrSubdomain: string) => Promise<string>,
+  ): ((idOrSubdomain: string) => Promise<string>) =>
+  (idOrSubdomain: string) =>
+    resolveBrand(idOrSubdomain, config.brandIds, resolveBrandSubdomain).then(
+      (sub) => sub ?? config.subdomain,
+    );
 
 /**
  * Registers one generation of the toolset (mode/filters applied) plus the
@@ -331,7 +347,7 @@ export const registerToolset = (
         config.subdomain,
         onUnauthorized,
         config.brandIds,
-        firstBrandHostResolver(config, sharedResolver),
+        firstBrandSubdomainResolver(config, sharedResolver),
       );
       registered.push(
         server.registerResource(
@@ -356,13 +372,17 @@ export const registerToolset = (
     // registered whenever help_center is active. The `list`
     // callback enumerates promoted articles only when the pre-listing is enabled,
     // and swallows scan failures: a transient error must not break resources/list,
-    // which would hide the topology resource too.
+    // which would hide the topology resource too. In multi/all mode the URIs
+    // carry the brand segment (`<scheme>://brands/{brand}/articles/{id}`) and
+    // the read resolves it through the shared allow-list + resolver, exactly
+    // like a tool call's brand_id.
     if (articleResourceEnabled(config)) {
       const articles = createArticleResourcesProvider(
         getToken,
         config.subdomain,
         onUnauthorized,
-        firstBrandHostResolver(config, sharedResolver),
+        resourceBrandResolver(config, sharedResolver),
+        config.brandIds,
       );
       const listPromotedEnabled = promotedArticlesEnabled(config);
       const template = new ResourceTemplate(articleResourceUriTemplate(config), {
@@ -379,15 +399,18 @@ export const registerToolset = (
             }
             return {
               resources: refs.map((ref) => ({
-                uri: articleResourceUri(config, ref.id),
-                name: ref.title,
+                uri: articleResourceUri(config, ref.id, ref.brand),
+                name: ref.brand === undefined ? ref.title : `${ref.title} (${ref.brand})`,
                 title: ref.title,
                 // Per-article description so clients that render `uri — description`
                 // in a resource picker can tell the entries apart (without it, every
                 // entry inherits the template's generic description and looks
                 // identical). Lead with the title + id so the distinguishing part
                 // survives the client truncating a long line.
-                description: `"${ref.title}" (article ${ref.id}) — promoted Help Center article, as Markdown.`,
+                description:
+                  ref.brand === undefined
+                    ? `"${ref.title}" (article ${ref.id}) — promoted Help Center article, as Markdown.`
+                    : `"${ref.title}" (article ${ref.id}, brand ${ref.brand}) — promoted Help Center article, as Markdown.`,
                 mimeType: 'text/markdown',
               })),
             };
@@ -406,21 +429,23 @@ export const registerToolset = (
           {
             title: 'Zendesk Help Center article',
             description:
-              'A Help Center article rendered as Markdown, addressed by id. The list surfaces the promoted (featured) articles so one can be pinned as context; any article id can be read, subject to your Zendesk read permissions.',
+              'A Help Center article rendered as Markdown, addressed by id (by brand and id when the server runs multi-brand). The list surfaces the promoted (featured) articles so one can be pinned as context; any article id can be read, subject to your Zendesk read permissions.',
             mimeType: 'text/markdown',
           },
           async (uri, variables) => {
-            const raw = Array.isArray(variables['id']) ? variables['id'][0] : variables['id'];
-            const id = Number(raw);
+            const rawId = Array.isArray(variables['id']) ? variables['id'][0] : variables['id'];
+            const id = Number(rawId);
             if (!Number.isSafeInteger(id) || id <= 0) {
               throw new Error(`Invalid article id in resource URI: ${uri.toString()}`);
             }
+            const rawBrand = variables['brand'];
+            const brand = Array.isArray(rawBrand) ? rawBrand[0] : rawBrand;
             return {
               contents: [
                 {
                   uri: uri.toString(),
                   mimeType: 'text/markdown',
-                  text: await articles.readArticle(id),
+                  text: await articles.readArticle(id, brand),
                 },
               ],
             };

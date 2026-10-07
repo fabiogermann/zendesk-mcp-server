@@ -1,4 +1,4 @@
-import { MAX_PAGE_SIZE } from '../constants';
+import { BRAND_LIST_TTL_MS, MAX_PAGE_SIZE } from '../constants';
 import type { ZendeskBrand, ZendeskListResponse } from '../types';
 import { zendeskGet } from './zendesk-api';
 
@@ -19,7 +19,7 @@ export type BrandSubdomainResolver = (idOrSubdomain: string) => Promise<string>;
  * which answers without `meta.after_cursor`, and the loop below would stop
  * after page 1 — a brand past the first 100 would resolve as Unknown.
  */
-const fetchAllBrands = async (subdomain: string, token: string): Promise<ZendeskBrand[]> => {
+export const fetchAllBrands = async (subdomain: string, token: string): Promise<ZendeskBrand[]> => {
   // Stryker disable next-line ArrayDeclaration: a seeded array would only add a
   // non-brand entry, which no id/subdomain lookup can match — equivalent.
   const brands: ZendeskBrand[] = [];
@@ -64,26 +64,33 @@ export const createBrandSubdomainResolver = (
   // key: every lookup resolves against the same fetch, so N allow-list entries
   // and any number of distinct brand_ids cost one /brands walk total, not N+1.
   // A rejection is evicted so the next lookup retries with a fresh token rather
-  // than caching a transient 401/5xx forever.
-  let listPromise: Promise<ZendeskBrand[]> | undefined;
+  // than caching a transient 401/5xx forever. A fulfilled list expires after
+  // BRAND_LIST_TTL_MS so a brand added after startup resolves without a restart.
+  let cached: { at: number; promise: Promise<ZendeskBrand[]> } | undefined;
   const brands = (): Promise<ZendeskBrand[]> => {
-    if (!listPromise) {
-      listPromise = (async () => fetchAllBrands(subdomain, await getToken()))();
-      listPromise.catch(() => {
-        listPromise = undefined;
+    if (!cached || Date.now() - cached.at >= BRAND_LIST_TTL_MS) {
+      const promise = (async () => fetchAllBrands(subdomain, await getToken()))();
+      cached = { at: Date.now(), promise };
+      promise.catch(() => {
+        cached = undefined;
       });
     }
-    return listPromise;
+    return cached.promise;
   };
 
   return async (idOrSubdomain) => {
     const all = await brands();
     const brand =
       all.find((b) => String(b.id) === idOrSubdomain) ??
-      all.find((b) => b.subdomain === idOrSubdomain);
+      // Zendesk subdomains are lowercase by construction, so a caller's casing
+      // ("Docs" for the "docs" brand) carries no meaning — match ignoring case.
+      all.find((b) => b.subdomain.toLowerCase() === idOrSubdomain.toLowerCase());
     if (!brand) {
+      // Neutral on purpose: the bad id-or-subdomain may come from the agent's
+      // per-call brand_id just as well as from --brand-ids, so blaming the
+      // server config here would send half the callers on the wrong chase.
       throw new Error(
-        `Unknown brand "${idOrSubdomain}": no brand with that id or subdomain exists on this account. Check --brand-ids / ZENDESK_BRAND_IDS, or call list_brands to see the available brands.`,
+        `Unknown brand "${idOrSubdomain}": no brand with that id or subdomain exists on this account; call list_brands to see the available brands.`,
       );
     }
     return brand.subdomain;

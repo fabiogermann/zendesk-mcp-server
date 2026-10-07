@@ -268,9 +268,12 @@ const parseBrandIds = (raw: string | undefined): string[] | undefined => {
     );
   }
   // 'all' is matched case-insensitively: 'ALL' is the flag written in caps, not
-  // a brand literally named ALL. Normalized to lowercase so every downstream
-  // check (the schema gate, resolveBrand, list_brands) sees the canonical form.
-  const normalized = entries.map((entry) => (entry.toLowerCase() === 'all' ? 'all' : entry));
+  // a brand literally named ALL. Every other entry is lowercased too: Zendesk
+  // subdomains are lowercase by construction, and normalising here keeps the
+  // downstream exact-string checks (schema gate, allow-list, list_brands
+  // filtering) from ever seeing a casing the resolver would accept but the
+  // string compares would not.
+  const normalized = entries.map((entry) => entry.toLowerCase());
   if (normalized.length > 1 && normalized.includes('all')) {
     throw new Error(
       'Invalid --brand-ids / ZENDESK_BRAND_IDS value: "all" cannot be combined with brand ids or subdomains.',

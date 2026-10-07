@@ -7,6 +7,7 @@ import { createHelpCenterTools } from '../../../src/tools/help-center';
 import {
   MOCK_ARTICLE,
   MOCK_BRAND,
+  MOCK_BRAND_SECOND,
   MOCK_CATEGORY,
   MOCK_CATEGORY_TRANSLATION,
   MOCK_SECTION,
@@ -202,6 +203,40 @@ describe('help center tools', () => {
       const text = result.content[0]?.text ?? '';
       expect(text).toContain('First brand');
       expect(text).toContain('Second brand');
+    });
+
+    it('fails loudly when /brands keeps signalling more pages without a usable cursor', async () => {
+      // The tool shares the resolver's pagination walk, stuck-cursor guard
+      // included: a stuck or offset-paginating server must surface as an error,
+      // not an endless loop or a silently truncated listing.
+      mswServer.use(
+        http.get('https://testsubdomain.zendesk.com/api/v2/brands', () =>
+          HttpResponse.json({ brands: [], meta: { has_more: true, after_cursor: '' } }),
+        ),
+      );
+      const allCtx: ToolContext = { ...ctx, brandIds: ['all'] };
+      const tool = createHelpCenterTools(allCtx).find((t) => t.name === 'list_brands');
+      if (!tool) throw new Error('list_brands not found');
+      await expect(tool.handler({})).rejects.toThrow(/no usable after_cursor/);
+    });
+
+    it('bypasses the shared resolver cache so the listing is always fresh', async () => {
+      // list_brands is the discovery/diagnostic surface: it must NOT be served
+      // from the resolver's memoised brand list, so it walks /brands itself on
+      // every call.
+      let calls = 0;
+      mswServer.use(
+        http.get('https://testsubdomain.zendesk.com/api/v2/brands', () => {
+          calls += 1;
+          return HttpResponse.json({ brands: [MOCK_BRAND, MOCK_BRAND_SECOND] });
+        }),
+      );
+      const allCtx: ToolContext = { ...ctx, brandIds: ['all'] };
+      const tool = createHelpCenterTools(allCtx).find((t) => t.name === 'list_brands');
+      if (!tool) throw new Error('list_brands not found');
+      await tool.handler({});
+      await tool.handler({});
+      expect(calls).toBe(2);
     });
 
     it('filters the listing to the allowed brands in multi mode', async () => {
