@@ -1,3 +1,18 @@
+## [3.2.1](https://github.com/fruggr/zendesk-mcp-server/compare/v3.2.0...v3.2.1) (2026-10-07)
+
+### Bug Fixes
+
+* align formatted output field names with the input parameters that set them ([#341](https://github.com/fruggr/zendesk-mcp-server/issues/341)) ([565ab4e](https://github.com/fruggr/zendesk-mcp-server/commit/565ab4ed5934ec0a3d70e7799a7c997c03a6f278)), closes [#339](https://github.com/fruggr/zendesk-mcp-server/issues/339), references [#329](https://github.com/fruggr/zendesk-mcp-server/issues/329)
+
+<details>
+<summary>🔧 Internal changes (chore, ci, build, refactor, tests, docs…)</summary>
+
+### Chores
+
+* **deps:** lock file maintenance ([#355](https://github.com/fruggr/zendesk-mcp-server/issues/355)) ([14995f8](https://github.com/fruggr/zendesk-mcp-server/commit/14995f8b49e99385a0035d528609c0cee8e8d3c2))
+* **docker:** update node.js to d5be02e ([#354](https://github.com/fruggr/zendesk-mcp-server/issues/354)) ([909d629](https://github.com/fruggr/zendesk-mcp-server/commit/909d6298b65ba627609dd8572310cfb8b9854c4f))
+</details>
+
 ## [3.2.0](https://github.com/fruggr/zendesk-mcp-server/compare/v3.1.2...v3.2.0) (2026-10-04)
 
 ### Features
