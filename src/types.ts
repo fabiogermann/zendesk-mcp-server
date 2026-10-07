@@ -457,6 +457,8 @@ export interface ZendeskBrand {
   host_mapping: string | null;
   default: boolean;
   active: boolean;
+  /** False when the brand has Guide disabled — it serves no Help Center API. */
+  has_help_center: boolean;
 }
 
 export interface ZendeskSection {

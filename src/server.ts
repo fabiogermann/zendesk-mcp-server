@@ -222,15 +222,22 @@ const firstBrandSubdomainResolver = (
  * Center fetch. Unset/single modes never reach here — their URIs carry no
  * brand segment.
  */
-const resourceBrandResolver =
-  (
-    config: Config,
-    resolveBrandSubdomain: (idOrSubdomain: string) => Promise<string>,
-  ): ((idOrSubdomain: string) => Promise<string>) =>
-  (idOrSubdomain: string) =>
-    resolveBrand(idOrSubdomain, config.brandIds, resolveBrandSubdomain).then(
-      (sub) => sub ?? config.subdomain,
-    );
+// A brand named in an article-resource URI is checked like a tool call's
+// brand_id in multi/all mode (allow-list via resolveBrand). Single-lock mode
+// resolves its one entry directly instead: its unscoped URIs carry no brand id,
+// and resolveBrand's single-lock path rejects undefined.
+const resourceBrandResolver = (
+  config: Config,
+  resolveBrandSubdomain: (idOrSubdomain: string) => Promise<string>,
+): ((idOrSubdomain: string) => Promise<string>) => {
+  const singleLock = config.brandIds?.length === 1 && config.brandIds[0] !== 'all';
+  return (idOrSubdomain: string) =>
+    singleLock
+      ? resolveBrandSubdomain(idOrSubdomain)
+      : resolveBrand(idOrSubdomain, config.brandIds, resolveBrandSubdomain).then(
+          (sub) => sub ?? config.subdomain,
+        );
+};
 
 /**
  * Registers one generation of the toolset (mode/filters applied) plus the

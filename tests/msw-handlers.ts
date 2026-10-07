@@ -571,6 +571,7 @@ export const MOCK_BRAND = {
   host_mapping: null,
   default: true,
   active: true,
+  has_help_center: true,
 };
 
 // A second brand, so multi-brand allow-list scenarios have two brands to
@@ -583,6 +584,7 @@ export const MOCK_BRAND_SECOND = {
   host_mapping: null,
   default: false,
   active: true,
+  has_help_center: true,
 };
 
 // A third brand: existing on the account but outside a two-brand allow-list,
@@ -595,6 +597,7 @@ export const MOCK_BRAND_THIRD = {
   host_mapping: null,
   default: false,
   active: true,
+  has_help_center: true,
 };
 
 export const MOCK_ARTICLE_ATTACHMENT = {
@@ -971,6 +974,20 @@ export const handlers = [
   // /api/v2/help_center path.
   http.get('https://brand424242.zendesk.com/api/v2/help_center/categories', () =>
     HttpResponse.json({ categories: [MOCK_CATEGORY] }),
+  ),
+  // The locked brand's article listing: single-lock mode pins the article
+  // resources to this host, so the promoted scan lands here, not on the
+  // account default. This handler is what makes the lock-bypass regression
+  // (resources reading the default brand) observable.
+  http.get('https://brand424242.zendesk.com/api/v2/help_center/articles', () =>
+    HttpResponse.json({
+      articles: [MOCK_ARTICLE, MOCK_PROMOTED_ARTICLE],
+      meta: { has_more: false, after_cursor: '' },
+      count: 2,
+    }),
+  ),
+  http.get('https://brand424242.zendesk.com/api/v2/help_center/articles/:id', ({ params }) =>
+    HttpResponse.json({ article: { ...MOCK_ARTICLE, id: Number(params['id']) } }),
   ),
 
   // Views (issue #121). Registered before `/tickets/:id` so `/tickets/show_many`

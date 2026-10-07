@@ -166,22 +166,57 @@ export const createArticleResourcesProvider = (
   // list_brands uses — so the URIs can carry each brand's subdomain); in
   // unset/single mode a single undefined entry — one Help Center, no brand
   // dimension.
+  const isSingleLock = brandIds !== undefined && brandIds.length === 1 && brandIds[0] !== 'all';
+
   const listBrands = async (): Promise<(string | undefined)[]> => {
-    if (brandIds === undefined || (brandIds.length === 1 && brandIds[0] !== 'all')) {
+    if (brandIds === undefined || isSingleLock) {
       return [undefined];
     }
     if (brandIds[0] === 'all') {
+      // Only brands that can actually serve a Help Center: an inactive brand
+      // or one with Guide disabled would 404 the whole listing.
       const all = await fetchAllBrands(subdomain, await getToken());
-      return all.map((b) => b.subdomain);
+      return all.filter((b) => b.active && b.has_help_center).map((b) => b.subdomain);
     }
     return brandIds;
   };
 
   // Resolve the effective Help Center subdomain for one listed/allowed brand
-  // entry. Undefined = the account default brand.
+  // entry. Undefined = the account default brand — EXCEPT in single-lock mode,
+  // where the undefined slot IS the locked brand and must resolve to it (the
+  // lock would otherwise be bypassed by the article resources).
   const effectiveSubdomain = async (brand: string | undefined): Promise<string> => {
-    if (brand === undefined) return subdomain;
-    return resolveBrandSubdomain(brand);
+    if (brand !== undefined) return resolveBrandSubdomain(brand);
+    if (isSingleLock) return resolveBrandSubdomain(brandIds[0] as string);
+    return subdomain;
+  };
+
+  // One brand's promoted scan, mapped to lean refs. A 401 is the caller's
+  // stale token, not a failing brand — it propagates so onUnauthorized
+  // invalidates the token. Any other failure skips the brand and marks the
+  // result truncated, so one bad brand (Guide disabled mid-session, a 5xx, a
+  // stale host) doesn't empty the whole listing.
+  const scanBrand = async (
+    brand: string | undefined,
+    token: string,
+  ): Promise<{ refs: PromotedArticleRef[]; truncated: boolean }> => {
+    const hcSubdomain = await effectiveSubdomain(brand);
+    try {
+      const scan = await fetchPromotedArticles(
+        hcSubdomain,
+        token,
+        ARTICLE_RESOURCES_SCAN_MAX_PAGES,
+      );
+      return {
+        refs: scan.articles.map((a) =>
+          brand === undefined ? { id: a.id, title: a.title } : { id: a.id, title: a.title, brand },
+        ),
+        truncated: scan.truncated,
+      };
+    } catch (err) {
+      if (err instanceof ZendeskApiError && err.status === 401) throw err;
+      return { refs: [], truncated: true };
+    }
   };
 
   return {
@@ -198,22 +233,9 @@ export const createArticleResourcesProvider = (
         const refs: PromotedArticleRef[] = [];
         let truncated = false;
         for (const brand of brands) {
-          const hcSubdomain = await effectiveSubdomain(brand);
-          const scan = await fetchPromotedArticles(
-            hcSubdomain,
-            token,
-            ARTICLE_RESOURCES_SCAN_MAX_PAGES,
-          );
+          const scan = await scanBrand(brand, token);
           truncated = truncated || scan.truncated;
-          // Map to lean refs before caching so the per-session cache holds only
-          // the id + title (+ brand), never the full article bodies.
-          for (const a of scan.articles) {
-            refs.push(
-              brand === undefined
-                ? { id: a.id, title: a.title }
-                : { id: a.id, title: a.title, brand },
-            );
-          }
+          refs.push(...scan.refs);
         }
         return { refs, truncated };
       })().catch((err: unknown) => {
