@@ -200,8 +200,11 @@ export const createArticleResourcesProvider = (
     brand: string | undefined,
     token: string,
   ): Promise<{ refs: PromotedArticleRef[]; truncated: boolean }> => {
-    const hcSubdomain = await effectiveSubdomain(brand);
     try {
+      // Resolution is inside the try: a bad allow-list entry (typo, or a brand
+      // deleted after deploy) skips only this brand instead of emptying the
+      // whole listing — the same tolerance the tools' allow-list path has.
+      const hcSubdomain = await effectiveSubdomain(brand);
       const scan = await fetchPromotedArticles(
         hcSubdomain,
         token,
