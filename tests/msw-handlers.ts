@@ -585,6 +585,18 @@ export const MOCK_BRAND_SECOND = {
   active: true,
 };
 
+// A third brand: existing on the account but outside a two-brand allow-list,
+// so the allow-list rejection (not just the Unknown-brand one) has a fixture.
+export const MOCK_BRAND_THIRD = {
+  id: 777777,
+  name: 'Third brand',
+  brand_url: 'https://brand777777.zendesk.com',
+  subdomain: 'brand777777',
+  host_mapping: null,
+  default: false,
+  active: true,
+};
+
 export const MOCK_ARTICLE_ATTACHMENT = {
   id: 20001,
   file_name: 'screenshot.png',
@@ -950,7 +962,9 @@ export const manyContentTagsHandler = http.get(`${BASE}/guide/content_tags`, () 
 export const handlers = [
   // Brands (Support API): the discovery source for --brand-ids. Shaped per the
   // Zendesk Brands API reference.
-  http.get(`${BASE}/brands`, () => HttpResponse.json({ brands: [MOCK_BRAND, MOCK_BRAND_SECOND] })),
+  http.get(`${BASE}/brands`, () =>
+    HttpResponse.json({ brands: [MOCK_BRAND, MOCK_BRAND_SECOND, MOCK_BRAND_THIRD] }),
+  ),
 
   // The second brand's Help Center host: Zendesk addresses brands by HOST, so
   // a brand's Guide answers on <brand.subdomain>.zendesk.com under the standard

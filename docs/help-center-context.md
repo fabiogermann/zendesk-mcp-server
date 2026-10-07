@@ -51,7 +51,13 @@ detail.
 
 ## `zendesk-hc://article/{id}` (pull-only resources)
 
-Two distinct capabilities behind one URI template.
+Two distinct capabilities behind one URI template. With `--brand-ids` naming
+several brands or `all`, the template gains a brand dimension —
+`<scheme>://brands/{brand}/articles/{id}` — because an article id alone does
+not say which brand's Help Center holds it. The brand is named by id or
+subdomain, exactly like the tools' `brand_id`, and is resolved through the
+same allow-list: a read for a brand outside the allow-list fails like a tool
+call would. Unset and single-brand servers keep `<scheme>://article/{id}`.
 
 Read-by-id: any article id can be read on demand and comes back as Markdown.
 That is one Zendesk fetch, with no preloading, and it consumes no LLM context
@@ -60,13 +66,14 @@ until an article is actually opened.
 Promoted pre-listing: the resource's *listing* surfaces the promoted
 (*featured*) articles, so a user can pin one in clients that support resource
 pinning or `@`-mentions. The companion `list_promoted_articles` tool returns the
-same set.
+same set. In multi/all mode the listing runs the bounded scan once per allowed
+brand and each entry carries its brand-scoped URI.
 
 ### What the pre-listing costs
 
 Only the pre-listing costs requests. Zendesk has no server-side filter for
 promoted articles, so finding them means scanning article pages, one API request
-per page, capped by
+per page and per brand in scope, capped by
 [`ARTICLE_RESOURCES_SCAN_MAX_PAGES`](configuration.md#article_resources_scan_max_pages).
 
 - The scan runs only on a client's `resources/list` call or a

@@ -21,9 +21,10 @@ const SUBDOMAIN = 'testsubdomain';
 const TOKEN = 'test-token';
 
 describe('fetchTopology', () => {
-  it('scopes per-brand Help Center calls to the brand host when one is given', async () => {
-    // Zendesk addresses brands by HOST: the brand's own host serves the
-    // standard /api/v2/help_center path and only that brand's content.
+  it('scopes per-brand Help Center calls to the brand subdomain when one is given', async () => {
+    // Zendesk addresses brands by HOST, and a brand's host is only ever
+    // <brand.subdomain>.zendesk.com — so the brand dimension is passed as the
+    // subdomain, not as a separate host string.
     const brandBase = 'https://brand424242.zendesk.com/api/v2/help_center';
     const seen: string[] = [];
     mswServer.use(
@@ -41,7 +42,7 @@ describe('fetchTopology', () => {
       }),
     );
 
-    const data = await fetchTopology(SUBDOMAIN, TOKEN, ['424242'], 'brand424242.zendesk.com');
+    const data = await fetchTopology(SUBDOMAIN, TOKEN, ['424242'], 'brand424242');
 
     // Brand-scoped: the tree (locales, categories, sections) is read from the
     // brand host. User segments, permission groups and the current user are

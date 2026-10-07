@@ -1,6 +1,13 @@
 import { HttpResponse, http } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
-import { errorHandlers, MOCK_PROMOTED_ARTICLE, promotedArticlesHandler } from '../msw-handlers';
+import {
+  errorHandlers,
+  MOCK_BRAND,
+  MOCK_BRAND_SECOND,
+  MOCK_BRAND_THIRD,
+  MOCK_PROMOTED_ARTICLE,
+  promotedArticlesHandler,
+} from '../msw-handlers';
 import { mswServer } from '../setup';
 import { type ConnectedClient, type IntegrationHarness, makeConfig } from './harness';
 
@@ -216,6 +223,106 @@ export const registerCoreScenarios = (harness: IntegrationHarness): void => {
         expect(uris).not.toContain('zendesk-hc://article/5001');
 
         const read = await connected.client.readResource({ uri: 'wiki://article/5001' });
+        expect(resourceTextOf(read)).toContain('(5001)');
+      });
+
+      it('carries a brand dimension in the article URIs in multi mode', async () => {
+        // With several brands an article id alone does not say WHICH Help
+        // Center holds it, so resources/list names the brand exactly like a
+        // tool call's brand_id — and the read resolves it through the same
+        // allow-list + resolver as the tools.
+        mswServer.use(
+          promotedArticlesHandler,
+          http.get('https://brand424242.zendesk.com/api/v2/help_center/articles', () =>
+            HttpResponse.json({
+              articles: [MOCK_PROMOTED_ARTICLE],
+              meta: { has_more: false, after_cursor: '' },
+              count: 1,
+            }),
+          ),
+          http.get('https://brand424242.zendesk.com/api/v2/help_center/articles/:id', () =>
+            HttpResponse.json({ article: MOCK_PROMOTED_ARTICLE }),
+          ),
+        );
+        connected = await harness.connect(
+          makeConfig({
+            mode: 'all',
+            brandIds: [String(MOCK_BRAND.id), String(MOCK_BRAND_SECOND.id)],
+          }),
+        );
+
+        // One promoted listing per allowed brand, each with a brand-scoped URI.
+        const { resources } = await connected.client.listResources();
+        const uris = resources.map((r) => r.uri);
+        expect(uris).toContain(`zendesk-hc://brands/${MOCK_BRAND.id}/articles/5001`);
+        expect(uris).toContain('zendesk-hc://brands/424242/articles/5001');
+        expect(uris.some((u) => u.startsWith('zendesk-hc://article/'))).toBe(false);
+
+        // A brand-scoped URI reads through the brand's own Help Center.
+        const read = await connected.client.readResource({
+          uri: 'zendesk-hc://brands/424242/articles/5001',
+        });
+        expect(resourceTextOf(read)).toContain('(5001)');
+
+        // A brand that exists on the account but sits outside the allow-list is
+        // refused by the shared guard — the same error a tool call gets.
+        await expect(
+          connected.client.readResource({
+            uri: `zendesk-hc://brands/${MOCK_BRAND_THIRD.id}/articles/5001`,
+          }),
+        ).rejects.toThrow(/not allowed/);
+        // And a brand that exists nowhere fails at resolution, same as a tool call.
+        await expect(
+          connected.client.readResource({ uri: 'zendesk-hc://brands/999999/articles/5001' }),
+        ).rejects.toThrow(/Unknown brand "999999"/);
+      });
+
+      it("accepts any brand in the article URIs in 'all' mode", async () => {
+        mswServer.use(
+          promotedArticlesHandler,
+          http.get('https://brand424242.zendesk.com/api/v2/help_center/articles', () =>
+            HttpResponse.json({
+              articles: [MOCK_PROMOTED_ARTICLE],
+              meta: { has_more: false, after_cursor: '' },
+              count: 1,
+            }),
+          ),
+          http.get('https://brand424242.zendesk.com/api/v2/help_center/articles/:id', () =>
+            HttpResponse.json({ article: MOCK_PROMOTED_ARTICLE }),
+          ),
+          // The third brand's Help Center has no promoted articles — the scan
+          // still answers, so one failing brand does not empty the listing.
+          http.get('https://brand777777.zendesk.com/api/v2/help_center/articles', () =>
+            HttpResponse.json({
+              articles: [],
+              meta: { has_more: false, after_cursor: '' },
+              count: 0,
+            }),
+          ),
+        );
+        connected = await harness.connect(makeConfig({ mode: 'all', brandIds: ['all'] }));
+
+        const { resources } = await connected.client.listResources();
+        const uris = resources.map((r) => r.uri);
+        expect(uris).toContain('zendesk-hc://brands/testsubdomain/articles/5001');
+        expect(uris).toContain('zendesk-hc://brands/brand424242/articles/5001');
+
+        const read = await connected.client.readResource({
+          uri: 'zendesk-hc://brands/brand424242/articles/5001',
+        });
+        expect(resourceTextOf(read)).toContain('(5001)');
+      });
+
+      it('keeps the unscoped article URIs in single-lock mode', async () => {
+        mswServer.use(promotedArticlesHandler);
+        connected = await harness.connect(
+          makeConfig({ mode: 'all', brandIds: [String(MOCK_BRAND_SECOND.id)] }),
+        );
+        const uris = (await connected.client.listResources()).resources.map((r) => r.uri);
+        expect(uris).toContain('zendesk-hc://article/5001');
+        expect(uris.some((u) => u.includes('/brands/'))).toBe(false);
+
+        const read = await connected.client.readResource({ uri: 'zendesk-hc://article/5001' });
         expect(resourceTextOf(read)).toContain('(5001)');
       });
     });

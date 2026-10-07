@@ -13,7 +13,7 @@ afterEach(() => {
 describe('fetchAllBrands', () => {
   it('returns every brand across cursor pages', async () => {
     const brands = await fetchAllBrands(SUBDOMAIN, TOKEN);
-    expect(brands.map((b) => b.id)).toEqual([360001234567, 424242]);
+    expect(brands.map((b) => b.id)).toEqual([360001234567, 424242, 777777]);
   });
 });
 
